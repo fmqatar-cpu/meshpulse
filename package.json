@@ -1,0 +1,17 @@
+{
+  "name": "mesh-link-monitor",
+  "version": "0.1.1",
+  "description": "Continuous Mesh Network Topology Discovery and Link-by-Link Diagnostic Application",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "build:ui": "npm --prefix client run build",
+    "build": "npm run build:ui",
+    "lint": "echo No linter configured"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

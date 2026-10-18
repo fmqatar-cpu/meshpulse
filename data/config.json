@@ -1,0 +1,19 @@
+{
+  "selectedProvider": "google_nest",
+  "pingIntervalMs": 1000,
+  "historyRetention": 60,
+  "targets": {
+    "internetHost": "1.1.1.1",
+    "fallbackInternetHost": "8.8.8.8"
+  },
+  "thresholds": {
+    "latencyWarningMs": 40,
+    "latencyCriticalMs": 100,
+    "lossWarningPct": 5,
+    "lossCriticalPct": 20,
+    "rssiWarningDbm": -72,
+    "rssiCriticalDbm": -82,
+    "jitterWarningMs": 25
+  },
+  "customNodes": []
+}
