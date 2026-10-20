@@ -713,17 +713,39 @@ export default function App() {
                       )}
                       {selectedNode.backhaulType && (
                         <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                          <span className="text-slate-500 block text-[10px]">BACKHAUL TRANSMISSION</span>
+                          <span className="text-slate-500 block text-[10px]">ACTIVE BACKHAUL MEDIUM</span>
                           <span className="text-cyan-400 font-bold">{selectedNode.backhaulType}</span>
                         </div>
                       )}
-                      {selectedNode.hasLocalLanDevice !== undefined && (
-                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                          <span className="text-slate-500 block text-[10px]">LOCAL PHYSICAL RJ-45 LAN PORT</span>
-                          <span className="text-cyan-400 font-bold">
-                            {selectedNode.hasLocalLanDevice ? 'Active (Local Device Plugged In)' : 'Unused'}
-                          </span>
-                        </div>
+                      {selectedNode.type === 'satellite' && selectedNode.wanPortLinked !== undefined && (
+                        <>
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                            <span className="text-slate-500 block text-[10px]">WAN PORT (GLOBE)</span>
+                            <span className={`font-bold ${selectedNode.wanPortLinked ? 'text-emerald-400' : 'text-slate-500'}`}>
+                              {selectedNode.wanPortLinked ? 'Carrier Active' : 'Carrier Down'}
+                            </span>
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                            <span className="text-slate-500 block text-[10px]">LAN PORT (&lt;...&gt;)</span>
+                            <span className={`font-bold ${selectedNode.lanPortLinked ? 'text-emerald-400' : 'text-slate-500'}`}>
+                              {selectedNode.lanPortLinked ? 'Carrier Active' : 'Carrier Down'}
+                            </span>
+                          </div>
+                          {!selectedNode.wanPortLinked && !selectedNode.lanPortLinked && (
+                            <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-800/60 col-span-2 text-xs">
+                              <span className="text-amber-300 font-bold block mb-1">⚠️ Ethernet Cable Not Detected by Hardware</span>
+                              <p className="text-slate-300 text-[11px] leading-relaxed">
+                                The Nest Point's internal PHY reports <strong>no electrical carrier</strong> on either RJ-45 port, so it silently fell back to 6 GHz wireless mesh.
+                              </p>
+                              <ul className="text-slate-400 text-[10px] mt-1.5 list-disc pl-4 space-y-0.5">
+                                <li>Check if the cable is plugged into the <strong>Globe</strong> port or the <strong>&lt;...&gt;</strong> port.</li>
+                                <li>Verify the other end is connected to the primary router or an active switch.</li>
+                                <li>Managed switches with 802.1d STP often disable Nest mesh wired ports.</li>
+                                <li>Reboot the satellite point after connecting the cable.</li>
+                              </ul>
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
