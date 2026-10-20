@@ -194,6 +194,9 @@ class GoogleNestProvider extends BaseProvider {
     leafNodes.forEach((leaf, idx) => {
       const leafId = `node_nest_${leaf.ip.replace(/\./g, '_')}`;
       const isClientOnThisLeaf = (connectedNode.ip === leaf.ip);
+      const isWiredBackhaul = Boolean(leaf.ethernetLink);
+      const backhaulDesc = isWiredBackhaul ? 'Wired Ethernet Backhaul' : 'Wi-Fi 6E Wireless Mesh';
+
       nodes.push({
         id: leafId,
         name: `Nest Point ${idx + 1} (${leaf.ip})`,
@@ -204,7 +207,8 @@ class GoogleNestProvider extends BaseProvider {
         model: leaf.model,
         softwareVersion: leaf.softwareVersion,
         uptime: leaf.uptime,
-        backhaulType: leaf.lanLink || leaf.ethernetLink ? 'Ethernet Cable' : 'Wi-Fi 6E Wireless Mesh',
+        backhaulType: backhaulDesc,
+        hasLocalLanDevice: Boolean(leaf.lanLink),
         meshChannel: leaf.meshChannel,
         isCurrentAP: isClientOnThisLeaf,
         status: 'online'
@@ -216,9 +220,9 @@ class GoogleNestProvider extends BaseProvider {
         id: backhaulLinkId,
         from: leafId,
         to: rootNodeId,
-        name: leaf.lanLink ? 'Wired Backhaul' : '6 GHz Mesh Backhaul',
-        type: leaf.lanLink ? 'ethernet_backhaul' : 'mesh_backhaul',
-        media: leaf.lanLink ? 'Ethernet' : 'Wireless 6GHz'
+        name: isWiredBackhaul ? 'Wired Backhaul' : '6 GHz Mesh Backhaul',
+        type: isWiredBackhaul ? 'ethernet_backhaul' : 'mesh_backhaul',
+        media: isWiredBackhaul ? 'Ethernet' : 'Wireless 6GHz'
       });
 
       // Target to test this satellite

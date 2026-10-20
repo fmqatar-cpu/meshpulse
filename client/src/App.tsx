@@ -260,8 +260,9 @@ export default function App() {
   const wifi: WifiInfo = snapshot?.wifi || { connected: false };
   const topology = snapshot?.topology || { nodes: [], links: [] };
   const links: Record<string, LinkStat> = snapshot?.links || {};
-  const diagnosis = snapshot?.diagnosis || { overallStatus: 'INITIALIZING', issues: [], incidents: [] };
+  const diagnosis = snapshot?.diagnosis || { overallStatus: 'INITIALIZING', healthScore: 100, issues: [], incidents: [] };
   const overallStatus = diagnosis.overallStatus;
+  const healthScore = typeof diagnosis.healthScore === 'number' ? diagnosis.healthScore : 100;
 
   // Helper to format uptime in hours/days
   const formatUptime = (seconds?: number) => {
@@ -331,7 +332,7 @@ export default function App() {
                   overallStatus === 'HEALTHY' ? 'bg-emerald-400 animate-pulse' :
                   overallStatus === 'DEGRADED' ? 'bg-amber-400 animate-pulse' : 'bg-rose-400 animate-ping'
                 }`} />
-                {overallStatus}
+                {overallStatus} ({healthScore}%)
               </span>
             </div>
             <p className="text-xs text-slate-400 flex items-center gap-1.5">
@@ -421,7 +422,7 @@ export default function App() {
           <div className="p-3.5 rounded-xl bg-emerald-950/30 border border-emerald-800/40 text-emerald-300 flex items-center justify-between text-xs font-medium">
             <div className="flex items-center gap-2.5">
               <CheckCircle className="w-4 h-4 text-emerald-400" />
-              <span>All mesh backhaul channels and client links are functioning within normal operational parameters (&lt;10ms local transit, 0% packet drop).</span>
+              <span>All mesh backhaul channels, client links, and WAN uplinks are functioning within normal operational parameters (0% packet drop).</span>
             </div>
             <span className="font-mono text-[11px] text-emerald-400/80">Continuous active probing</span>
           </div>
@@ -475,7 +476,7 @@ export default function App() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
             {/* Visual Architecture Map Canvas */}
-            <div className="lg:col-span-2 glass-panel p-6 flex flex-col justify-between min-h-[440px] relative overflow-hidden">
+            <div className="lg:col-span-2 glass-panel p-5 flex flex-col justify-between min-h-[440px] relative">
               <div className="flex items-center justify-between z-10">
                 <div>
                   <h3 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2">
@@ -497,155 +498,166 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Dynamic Interactive Node Diagram */}
-              <div className="py-10 flex flex-col md:flex-row items-center justify-between gap-6 z-10 px-4">
-                
-                {/* 1. Host PC */}
-                <div
-                  onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'client'))}
-                  className={`cursor-pointer p-4 rounded-xl border flex flex-col items-center gap-2 transition hover:scale-105 ${
-                    selectedNode?.type === 'client'
-                      ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
-                      : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="w-12 h-12 rounded-xl bg-slate-800 flex items-center justify-center text-cyan-400 shadow-md">
-                    <Laptop className="w-6 h-6" />
+              {/* Dynamic Interactive Node Diagram - Responsive & Visible */}
+              <div className="py-8 overflow-x-auto">
+                <div className="flex items-center justify-between gap-2 sm:gap-3 z-10 px-2 min-w-[680px]">
+                  
+                  {/* 1. Host PC */}
+                  <div
+                    onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'client'))}
+                    className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[100px] ${
+                      selectedNode?.type === 'client'
+                        ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
+                        : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-cyan-400 shadow-md">
+                      <Laptop className="w-5 h-5" />
+                    </div>
+                    <div className="text-center w-full">
+                      <div className="text-xs font-bold text-white truncate">Host PC</div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">{wifi.signal}% ({wifi.rssi} dBm)</div>
+                      <div className="text-[9px] text-cyan-400 font-mono">{wifi.band || '5 GHz'}</div>
+                    </div>
                   </div>
-                  <div className="text-center">
-                    <div className="text-xs font-bold text-white">Host PC</div>
-                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">{wifi.signal}% ({wifi.rssi} dBm)</div>
-                    <div className="text-[10px] text-cyan-400 font-mono">{wifi.band}</div>
-                  </div>
-                </div>
 
-                {/* Animated Arrow / Link 1 */}
-                <div className="flex flex-col items-center justify-center gap-1 font-mono text-[11px]">
-                  <span className="text-slate-400 text-[10px]">PC ➔ AP</span>
-                  <div className={`px-2 py-0.5 rounded font-bold border ${
-                    (links['link_client_ap']?.avg || 0) > 40
-                      ? 'bg-amber-950/60 text-amber-400 border-amber-600/40'
-                      : 'bg-emerald-950/60 text-emerald-400 border-emerald-600/40'
-                  }`}>
-                    {links['link_client_ap']?.current !== null ? `${links['link_client_ap']?.current} ms` : '—'}
+                  {/* Animated Arrow / Link 1 */}
+                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[64px]">
+                    <span className="text-slate-400 text-[9px]">PC ➔ AP</span>
+                    <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
+                      (links['link_client_ap']?.avg || 0) > 40
+                        ? 'bg-amber-950/60 text-amber-400 border-amber-600/40'
+                        : 'bg-emerald-950/60 text-emerald-400 border-emerald-600/40'
+                    }`}>
+                      {links['link_client_ap']?.current !== null ? `${links['link_client_ap']?.current} ms` : '—'}
+                    </div>
+                    <div className="w-12 h-0.5 bg-gradient-to-r from-cyan-500 via-indigo-500 to-emerald-500 relative">
+                      <div className="w-1.5 h-1.5 rounded-full bg-white absolute -top-0.5 animate-ping" />
+                    </div>
+                    <span className="text-[9px] text-slate-500">
+                      {links['link_client_ap']?.lossPct || 0}% loss
+                    </span>
                   </div>
-                  <div className="w-16 h-0.5 bg-gradient-to-r from-cyan-500 via-indigo-500 to-emerald-500 relative">
-                    <div className="w-1.5 h-1.5 rounded-full bg-white absolute -top-0.5 animate-ping" />
-                  </div>
-                  <span className="text-[9px] text-slate-500">
-                    {links['link_client_ap']?.lossPct || 0}% loss
-                  </span>
-                </div>
 
-                {/* 2. Satellites / Access Points Stack */}
-                <div className="flex flex-col gap-3">
-                  {topology.nodes?.filter((n: any) => n.type === 'satellite').map((sat: any) => (
-                    <div
-                      key={sat.id}
-                      onClick={() => setSelectedNode(sat)}
-                      className={`cursor-pointer p-3.5 rounded-xl border flex items-center gap-3 transition hover:scale-105 ${
-                        sat.isCurrentAP
-                          ? 'border-emerald-500/70 bg-emerald-950/20 shadow-lg shadow-emerald-500/10'
-                          : selectedNode?.id === sat.id
-                          ? 'border-indigo-400 bg-indigo-950/40'
-                          : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center text-indigo-400">
-                        <Router className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-xs font-bold text-white">{sat.name}</span>
+                  {/* 2. Satellites / Access Points Stack */}
+                  <div className="flex flex-col gap-2 shrink-0">
+                    {topology.nodes?.filter((n: any) => n.type === 'satellite').map((sat: any) => (
+                      <div
+                        key={sat.id}
+                        onClick={() => setSelectedNode(sat)}
+                        className={`cursor-pointer p-2.5 rounded-xl border flex items-center gap-2.5 transition hover:scale-105 w-[165px] ${
+                          sat.isCurrentAP
+                            ? 'border-emerald-500/70 bg-emerald-950/20 shadow-lg shadow-emerald-500/10'
+                            : selectedNode?.id === sat.id
+                            ? 'border-indigo-400 bg-indigo-950/40'
+                            : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-indigo-400 shrink-0">
+                          <Router className="w-4 h-4" />
+                        </div>
+                        <div className="overflow-hidden">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-bold text-white truncate">{sat.name}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-400 font-mono truncate">{sat.ip}</div>
+                          <div className="text-[9px] text-indigo-400 font-mono truncate mt-0.5">
+                            {sat.backhaulType || 'Mesh Backhaul'}
+                          </div>
                           {sat.isCurrentAP && (
-                            <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold">
+                            <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
                               Connected AP
                             </span>
                           )}
+                          {sat.hasLocalLanDevice && (
+                            <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 font-semibold inline-block mt-0.5 ml-1">
+                              LAN Active
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[11px] text-slate-400 font-mono">{sat.ip}</div>
-                        <div className="text-[10px] text-indigo-400 font-mono mt-0.5">
-                          {sat.backhaulType || 'Mesh Backhaul'}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Animated Arrow / Link 2 (Backhaul) */}
+                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[64px]">
+                    <span className="text-slate-400 text-[9px]">Backhaul</span>
+                    <div className="px-1.5 py-0.5 rounded font-bold border bg-indigo-950/60 text-indigo-300 border-indigo-600/40 text-center">
+                      6 GHz
+                    </div>
+                    <div className="w-12 h-0.5 bg-gradient-to-r from-indigo-500 to-purple-500 relative">
+                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-300 absolute -top-0.5" />
+                    </div>
+                    <span className="text-[8px] text-slate-500">Ch {topology.systemInfo?.meshChannel || '197'}</span>
+                  </div>
+
+                  {/* 3. Main Router (Root Gateway) */}
+                  {(() => {
+                    const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
+                      name: 'Main Router',
+                      ip: '192.168.86.1'
+                    };
+                    return (
+                      <div
+                        onClick={() => setSelectedNode(rootNode)}
+                        className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[115px] ${
+                          selectedNode?.id === rootNode.id
+                            ? 'border-purple-400 bg-purple-950/40 ring-2 ring-purple-500/20'
+                            : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="w-10 h-10 rounded-lg bg-purple-950/60 border border-purple-500/30 flex items-center justify-center text-purple-400 shadow-md">
+                          <Router className="w-5 h-5" />
+                        </div>
+                        <div className="text-center w-full">
+                          <div className="text-xs font-bold text-white truncate">{rootNode.name}</div>
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">{rootNode.ip}</div>
+                          <div className="text-[9px] text-purple-400 font-mono">Root Gateway</div>
                         </div>
                       </div>
+                    );
+                  })()}
+
+                  {/* Animated Arrow / Link 3 (WAN) */}
+                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                    <span className="text-slate-400 text-[9px]">WAN Uplink</span>
+                    <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
+                      (links['link_gateway_wan']?.lossPct || 0) > 5
+                        ? 'bg-rose-950/60 text-rose-400 border-rose-600/40 animate-pulse'
+                        : 'bg-cyan-950/60 text-cyan-300 border-cyan-600/40'
+                    }`}>
+                      {links['link_gateway_wan']?.current !== null ? `${links['link_gateway_wan']?.current} ms` : '—'}
                     </div>
-                  ))}
-                </div>
-
-                {/* Animated Arrow / Link 2 (Backhaul) */}
-                <div className="flex flex-col items-center justify-center gap-1 font-mono text-[11px]">
-                  <span className="text-slate-400 text-[10px]">Backhaul</span>
-                  <div className="px-2 py-0.5 rounded font-bold border bg-indigo-950/60 text-indigo-300 border-indigo-600/40">
-                    6 GHz Mesh
+                    <div className={`w-12 h-0.5 relative ${
+                      (links['link_gateway_wan']?.lossPct || 0) > 5 ? 'bg-rose-500' : 'bg-gradient-to-r from-purple-500 to-cyan-500'
+                    }`} />
+                    <span className={`text-[9px] font-bold ${
+                      (links['link_gateway_wan']?.lossPct || 0) > 5 ? 'text-rose-400' : 'text-slate-500'
+                    }`}>
+                      {links['link_gateway_wan']?.lossPct || 0}% loss
+                    </span>
                   </div>
-                  <div className="w-16 h-0.5 bg-gradient-to-r from-indigo-500 to-purple-500 relative">
-                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-300 absolute -top-0.5" />
-                  </div>
-                  <span className="text-[9px] text-slate-500">Channel {topology.systemInfo?.meshChannel || '197'}</span>
-                </div>
 
-                {/* 3. Main Router (Root Gateway) */}
-                {(() => {
-                  const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
-                    name: 'Main Router',
-                    ip: '192.168.86.1'
-                  };
-                  return (
-                    <div
-                      onClick={() => setSelectedNode(rootNode)}
-                      className={`cursor-pointer p-4 rounded-xl border flex flex-col items-center gap-2 transition hover:scale-105 ${
-                        selectedNode?.id === rootNode.id
-                          ? 'border-purple-400 bg-purple-950/40 ring-2 ring-purple-500/20'
-                          : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="w-12 h-12 rounded-xl bg-purple-950/60 border border-purple-500/30 flex items-center justify-center text-purple-400 shadow-md">
-                        <Router className="w-6 h-6" />
-                      </div>
-                      <div className="text-center">
-                        <div className="text-xs font-bold text-white">{rootNode.name}</div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-0.5">{rootNode.ip}</div>
-                        <div className="text-[10px] text-purple-400 font-mono">Root Gateway</div>
-                      </div>
+                  {/* 4. WAN / Internet */}
+                  <div
+                    onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'wan'))}
+                    className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[100px] ${
+                      selectedNode?.type === 'wan'
+                        ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
+                        : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-cyan-950/60 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-md">
+                      <Globe className="w-5 h-5" />
                     </div>
-                  );
-                })()}
-
-                {/* Animated Arrow / Link 3 (WAN) */}
-                <div className="flex flex-col items-center justify-center gap-1 font-mono text-[11px]">
-                  <span className="text-slate-400 text-[10px]">WAN Uplink</span>
-                  <div className={`px-2 py-0.5 rounded font-bold border ${
-                    (links['link_gateway_wan']?.lossPct || 0) > 5
-                      ? 'bg-rose-950/60 text-rose-400 border-rose-600/40'
-                      : 'bg-cyan-950/60 text-cyan-300 border-cyan-600/40'
-                  }`}>
-                    {links['link_gateway_wan']?.current !== null ? `${links['link_gateway_wan']?.current} ms` : '—'}
+                    <div className="text-center w-full">
+                      <div className="text-xs font-bold text-white truncate">Internet</div>
+                      <div className="text-[10px] text-slate-400 font-mono mt-0.5">1.1.1.1</div>
+                      <div className="text-[9px] text-cyan-400 font-mono">Cloud Edge</div>
+                    </div>
                   </div>
-                  <div className="w-16 h-0.5 bg-gradient-to-r from-purple-500 to-cyan-500 relative" />
-                  <span className="text-[9px] text-slate-500">
-                    {links['link_gateway_wan']?.lossPct || 0}% loss
-                  </span>
+
                 </div>
-
-                {/* 4. WAN / Internet */}
-                <div
-                  onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'wan'))}
-                  className={`cursor-pointer p-4 rounded-xl border flex flex-col items-center gap-2 transition hover:scale-105 ${
-                    selectedNode?.type === 'wan'
-                      ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
-                      : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="w-12 h-12 rounded-xl bg-cyan-950/60 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-md">
-                    <Globe className="w-6 h-6" />
-                  </div>
-                  <div className="text-center">
-                    <div className="text-xs font-bold text-white">Internet</div>
-                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">1.1.1.1</div>
-                    <div className="text-[10px] text-cyan-400 font-mono">Cloud Edge</div>
-                  </div>
-                </div>
-
               </div>
 
               {/* Bottom Legend / Telemetry Bar */}
@@ -705,6 +717,14 @@ export default function App() {
                           <span className="text-cyan-400 font-bold">{selectedNode.backhaulType}</span>
                         </div>
                       )}
+                      {selectedNode.hasLocalLanDevice !== undefined && (
+                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
+                          <span className="text-slate-500 block text-[10px]">LOCAL PHYSICAL RJ-45 LAN PORT</span>
+                          <span className="text-cyan-400 font-bold">
+                            {selectedNode.hasLocalLanDevice ? 'Active (Local Device Plugged In)' : 'Unused'}
+                          </span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -714,14 +734,25 @@ export default function App() {
                 )}
               </div>
 
-              {/* Quick Health Summary */}
+              {/* Dynamic Composite Health Summary */}
               <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 mt-4">
                 <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">Mesh Health Score</span>
-                  <span className="font-bold text-emerald-400">98 / 100</span>
+                  <span className="text-slate-400 font-medium">Composite Network Health</span>
+                  <span className={`font-bold font-mono text-sm ${
+                    healthScore >= 90 ? 'text-emerald-400' :
+                    healthScore >= 70 ? 'text-amber-400' : 'text-rose-400'
+                  }`}>
+                    {healthScore} / 100
+                  </span>
                 </div>
-                <div className="w-full bg-slate-800 h-1.5 rounded-full mt-2 overflow-hidden">
-                  <div className="bg-gradient-to-r from-emerald-500 to-cyan-400 h-full w-[98%]" />
+                <div className="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-500 rounded-full bg-gradient-to-r ${
+                      healthScore >= 90 ? 'from-emerald-500 to-cyan-400' :
+                      healthScore >= 70 ? 'from-amber-500 to-orange-400' : 'from-rose-500 to-red-600'
+                    }`}
+                    style={{ width: `${healthScore}%` }}
+                  />
                 </div>
               </div>
             </div>

@@ -1,6 +1,6 @@
 {
   "name": "mesh-link-monitor",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Continuous Mesh Network Topology Discovery and Link-by-Link Diagnostic Application",
   "main": "server/index.js",
   "scripts": {

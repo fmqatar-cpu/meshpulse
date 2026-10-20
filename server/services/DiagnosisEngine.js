@@ -98,20 +98,35 @@ class DiagnosisEngine {
     }
 
     // 3. Differential Root Cause Analysis (Internal Mesh vs External ISP)
-    if (pcToGatewayStats && gatewayToWanStats) {
-      const isInternalGood = (pcToGatewayStats.avg || 0) < thresholds.latencyWarningMs && pcToGatewayStats.lossPct < 5;
-      const isWanBad = (gatewayToWanStats.avg || 0) > thresholds.latencyCriticalMs || gatewayToWanStats.lossPct >= thresholds.lossWarningPct;
+    if (gatewayToWanStats) {
+      const isWanBad = (gatewayToWanStats.avg || 0) > thresholds.latencyWarningMs || gatewayToWanStats.lossPct >= thresholds.lossWarningPct;
+      const isInternalGood = pcToGatewayStats 
+        ? ((pcToGatewayStats.avg || 0) < thresholds.latencyWarningMs && pcToGatewayStats.lossPct < 5)
+        : true;
 
-      if (isInternalGood && isWanBad) {
-        issues.push({
-          id: 'ISP_WAN_DEGRADATION',
-          severity: gatewayToWanStats.lossPct > 15 ? 'CRITICAL' : 'WARNING',
-          title: 'External Internet (ISP) Degradation Detected',
-          description: `Your internal mesh network is completely healthy (<${pcToGatewayStats.avg || 2}ms to gateway), but latency to the Internet is ${gatewayToWanStats.avg}ms with ${gatewayToWanStats.lossPct}% packet loss.`,
-          recommendation: 'The problem is outside your home mesh (ISP upstream or modem link). Restart modem or contact ISP.'
-        });
-        if (gatewayToWanStats.lossPct > 15) overallStatus = 'CRITICAL';
-        else if (overallStatus !== 'CRITICAL') overallStatus = 'DEGRADED';
+      if (isWanBad) {
+        if (isInternalGood) {
+          issues.push({
+            id: 'ISP_WAN_DEGRADATION',
+            severity: gatewayToWanStats.lossPct >= thresholds.lossCriticalPct ? 'CRITICAL' : 'WARNING',
+            title: 'External Internet (ISP) Packet Loss Detected',
+            description: `Internal home mesh is completely healthy (<${pcToGatewayStats?.avg || 3}ms, 0% loss), but WAN uplink is experiencing ${gatewayToWanStats.lossPct}% packet loss (${gatewayToWanStats.current || gatewayToWanStats.avg}ms latency).`,
+            recommendation: 'Issue is outside your home mesh (ISP upstream or modem link). Check modem cable or contact ISP.'
+          });
+        } else {
+          issues.push({
+            id: 'WAN_AND_LOCAL_DEGRADATION',
+            severity: 'CRITICAL',
+            title: 'Widespread Latency / Packet Loss',
+            description: `Experiencing ${gatewayToWanStats.lossPct}% loss to the Internet and degraded local mesh transit.`,
+            recommendation: 'Restart primary router and verify cable modem connections.'
+          });
+        }
+        if (gatewayToWanStats.lossPct >= thresholds.lossCriticalPct) {
+          overallStatus = 'CRITICAL';
+        } else if (overallStatus !== 'CRITICAL') {
+          overallStatus = 'DEGRADED';
+        }
       }
     }
 
@@ -130,11 +145,47 @@ class DiagnosisEngine {
       }
     }
 
+    // 4. Calculate Dynamic Composite Health Score (0 - 100)
+    let score = 100;
+    if (wifiInfo && wifiInfo.connected) {
+      if (wifiInfo.rssi && wifiInfo.rssi <= thresholds.rssiCriticalDbm) score -= 20;
+      else if (wifiInfo.rssi && wifiInfo.rssi <= thresholds.rssiWarningDbm) score -= 8;
+    } else {
+      score -= 50;
+    }
+
+    // Deduct for WAN packet loss
+    if (gatewayToWanStats && gatewayToWanStats.lossPct > 0) {
+      score -= Math.min(40, gatewayToWanStats.lossPct * 2);
+    }
+
+    // Deduct for local client-to-AP loss/latency
+    if (pcToApStats) {
+      if (pcToApStats.lossPct > 0) score -= Math.min(35, pcToApStats.lossPct * 2.5);
+      if ((pcToApStats.avg || 0) > thresholds.latencyWarningMs) score -= 10;
+    }
+
+    // Deduct for each degraded satellite
+    if (topology && topology.nodes) {
+      topology.nodes.forEach(node => {
+        if (node.type === 'satellite') {
+          const sLink = linkStats[`link_node_${node.id}`] || linkStats[`link_client_${node.id}`];
+          if (sLink) {
+            if (sLink.lossPct === 100) score -= 30;
+            else if (sLink.lossPct > 0) score -= Math.min(20, sLink.lossPct * 1.5);
+          }
+        }
+      });
+    }
+
+    const healthScore = Math.max(0, Math.min(100, Math.round(score)));
+
     // Record new incidents in history
     this.recordIncidents(issues);
 
     return {
       overallStatus,
+      healthScore,
       issues,
       incidents: this.incidents.slice(0, 30)
     };
