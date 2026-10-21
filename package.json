@@ -1,17 +1,40 @@
 {
   "name": "mesh-link-monitor",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "Continuous Mesh Network Topology Discovery and Link-by-Link Diagnostic Application",
-  "main": "server/index.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node server/index.js",
-    "dev": "node server/index.js",
+    "start:electron": "electron .",
     "build:ui": "npm --prefix client run build",
     "build": "npm run build:ui",
-    "lint": "echo No linter configured"
+    "package:win": "npm run build:ui && electron-builder --win portable --dir",
+    "dist:win": "npm run build:ui && electron-builder --win portable"
   },
   "dependencies": {
     "express": "^4.21.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.3",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.meshpulse.app",
+    "productName": "MeshPulse",
+    "files": [
+      "server/**/*",
+      "client/dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-electron"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ]
+    }
   }
 }

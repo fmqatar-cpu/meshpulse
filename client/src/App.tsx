@@ -143,8 +143,166 @@ export default function App() {
     }
   };
 
-  // Setup WebSocket for continuous live streaming
+  // Setup WebSocket or Android Native Bridge for continuous live streaming
   useEffect(() => {
+    const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+
+    if (isAndroid) {
+      setWsConnected(true);
+      setActiveProvider({
+        id: 'android_native',
+        name: 'Android Native Mesh Scanner',
+        description: 'Using Android WifiManager and native ICMP sockets'
+      });
+
+      const androidHistory: Record<string, { t: number; ms: number | null }[]> = {
+        link_client_ap: [],
+        link_gateway_wan: []
+      };
+
+      const runAndroidTick = () => {
+        try {
+          const bridge = (window as any).AndroidBridge;
+          const wifiRaw = bridge.getWifiInfo();
+          const wifiParsed = JSON.parse(wifiRaw);
+
+          if (!wifiParsed.connected) {
+            setSnapshot((prev: any) => ({
+              ...prev,
+              wifi: { connected: false },
+              diagnosis: { overallStatus: 'CRITICAL', healthScore: 0, issues: [{
+                id: 'WIFI_DISCONNECTED',
+                severity: 'CRITICAL',
+                title: 'Android Wi-Fi Disconnected',
+                description: 'Device is not connected to a Wi-Fi network.',
+                recommendation: 'Connect to your home mesh Wi-Fi network.'
+              }], incidents: [] }
+            }));
+            return;
+          }
+
+          const gatewayIp = wifiParsed.gatewayIp || '192.168.86.1';
+          const apPingRaw = JSON.parse(bridge.ping(gatewayIp, 1));
+          const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
+
+          const now = Date.now();
+          const apMs = apPingRaw.success ? Math.round(apPingRaw.latency) : null;
+          const wanMs = wanPingRaw.success ? Math.round(wanPingRaw.latency) : null;
+
+          androidHistory.link_client_ap.push({ t: now, ms: apMs });
+          if (androidHistory.link_client_ap.length > 25) androidHistory.link_client_ap.shift();
+
+          androidHistory.link_gateway_wan.push({ t: now, ms: wanMs });
+          if (androidHistory.link_gateway_wan.length > 25) androidHistory.link_gateway_wan.shift();
+
+          const calcStats = (targetId: string, host: string, hist: { t: number; ms: number | null }[]) => {
+            const successes = hist.filter(h => h.ms !== null).map(h => h.ms as number);
+            const lossPct = hist.length > 0 ? Math.round(((hist.length - successes.length) / hist.length) * 100) : 0;
+            const current = successes.length > 0 ? successes[successes.length - 1] : null;
+            const avg = successes.length > 0 ? Math.round((successes.reduce((a, b) => a + b, 0) / successes.length) * 10) / 10 : 0;
+            return {
+              targetId,
+              host,
+              current,
+              avg,
+              min: successes.length > 0 ? Math.min(...successes) : null,
+              max: successes.length > 0 ? Math.max(...successes) : null,
+              lossPct,
+              jitter: 1.0,
+              samplesCount: hist.length,
+              history: [...hist]
+            };
+          };
+
+          const linkStats: Record<string, any> = {
+            link_client_ap: calcStats('link_client_ap', gatewayIp, androidHistory.link_client_ap),
+            link_gateway_wan: calcStats('link_gateway_wan', '1.1.1.1', androidHistory.link_gateway_wan)
+          };
+
+          // Try probing router API
+          let routerModel = 'Mesh Gateway';
+          try {
+            const httpRes = JSON.parse(bridge.fetchHttp(`http://${gatewayIp}/api/v1/status`, 800));
+            if (httpRes.success && httpRes.data) {
+              const rData = JSON.parse(httpRes.data);
+              if (rData.system?.modelId) routerModel = rData.system.modelId;
+            }
+          } catch (e) {
+            // fallback
+          }
+
+          const nodes = [
+            {
+              id: 'node_client',
+              name: 'Android Phone',
+              type: 'client',
+              role: 'client',
+              ip: wifiParsed.localIp,
+              connectedBssid: wifiParsed.bssid,
+              signal: wifiParsed.signal,
+              rssi: wifiParsed.rssi,
+              band: wifiParsed.band,
+              status: 'online'
+            },
+            {
+              id: 'node_gateway',
+              name: `${routerModel} (${gatewayIp})`,
+              type: 'root',
+              role: 'root',
+              ip: gatewayIp,
+              model: routerModel,
+              status: 'online'
+            },
+            {
+              id: 'node_internet',
+              name: 'Internet Gateway',
+              type: 'wan',
+              role: 'internet',
+              ip: '1.1.1.1',
+              status: 'online'
+            }
+          ];
+
+          const linksArr = [
+            { id: 'link_client_ap', from: 'node_client', to: 'node_gateway', name: 'Wi-Fi Link', type: 'wifi_client', media: 'Wi-Fi' },
+            { id: 'link_gateway_wan', from: 'node_gateway', to: 'node_internet', name: 'WAN Link', type: 'wan_link', media: 'Broadband' }
+          ];
+
+          let healthScore = 100;
+          if (linkStats.link_gateway_wan.lossPct > 0) healthScore -= linkStats.link_gateway_wan.lossPct * 2;
+          if (linkStats.link_client_ap.lossPct > 0) healthScore -= linkStats.link_client_ap.lossPct * 3;
+          healthScore = Math.max(0, Math.min(100, healthScore));
+
+          const overallStatus = healthScore >= 90 ? 'HEALTHY' : healthScore >= 70 ? 'DEGRADED' : 'CRITICAL';
+
+          setSnapshot({
+            wifi: wifiParsed,
+            topology: { nodes, links: linksArr },
+            links: linkStats,
+            diagnosis: {
+              overallStatus,
+              healthScore,
+              issues: linkStats.link_gateway_wan.lossPct > 5 ? [{
+                id: 'WAN_LOSS',
+                severity: 'WARNING',
+                title: 'WAN Internet Packet Loss',
+                description: `Experiencing ${linkStats.link_gateway_wan.lossPct}% packet loss to external internet.`,
+                recommendation: 'Check external ISP connection.'
+              }] : [],
+              incidents: []
+            }
+          });
+        } catch (err) {
+          console.error('Android bridge error:', err);
+        }
+      };
+
+      runAndroidTick();
+      const interval = setInterval(runAndroidTick, 1000);
+      return () => clearInterval(interval);
+    }
+
+    // Standard Desktop / Browser Mode
     fetchStatus();
     fetchProviders();
 
