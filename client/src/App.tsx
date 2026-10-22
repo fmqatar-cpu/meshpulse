@@ -34,6 +34,7 @@ interface WifiInfo {
   rssi: number;
   rxRate: number;
   txRate: number;
+  gatewayIp?: string;
   meshBssids?: any[];
 }
 
@@ -181,7 +182,7 @@ export default function App() {
             return;
           }
 
-          const gatewayIp = wifiParsed.gatewayIp || '192.168.86.1';
+          const gatewayIp = wifiParsed.gatewayIp || '192.168.1.1';
           const apPingRaw = JSON.parse(bridge.ping(gatewayIp, 1));
           const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
 
@@ -784,7 +785,7 @@ export default function App() {
                   {(() => {
                     const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
                       name: 'Main Router',
-                      ip: '192.168.86.1'
+                      ip: wifi.gatewayIp || '192.168.1.1'
                     };
                     return (
                       <div

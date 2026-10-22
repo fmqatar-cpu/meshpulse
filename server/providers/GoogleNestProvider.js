@@ -43,26 +43,59 @@ class GoogleNestProvider extends BaseProvider {
     this.discoveredNodes = [];
   }
 
+  async getNetworkInfo() {
+    const stdout = await execCommand('ipconfig');
+    const lines = stdout.split(/\r?\n/);
+    let gatewayIp = null;
+    let localIp = null;
+
+    for (const line of lines) {
+      const ipMatch = line.match(/IPv4 Address[ .]*:\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/i);
+      if (ipMatch) {
+        localIp = ipMatch[1];
+      }
+      const gwMatch = line.match(/Default Gateway[ .]*:\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/i);
+      if (gwMatch && gwMatch[1] !== '0.0.0.0') {
+        gatewayIp = gwMatch[1];
+        break;
+      }
+    }
+
+    if (!gatewayIp) {
+      const routeOut = await execCommand('powershell -Command "(Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop"');
+      const trimmed = (routeOut || '').trim();
+      if (/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/.test(trimmed) && trimmed !== '0.0.0.0') {
+        gatewayIp = trimmed;
+      }
+    }
+
+    const subnetPrefix = gatewayIp ? gatewayIp.split('.').slice(0, 3).join('.') + '.' : null;
+    return { gatewayIp, localIp, subnetPrefix };
+  }
+
   async isApplicable(wifiInfo) {
     try {
-      const res = await fetchJson('http://192.168.86.1/api/v1/status', 1000);
+      const net = await this.getNetworkInfo();
+      if (!net.gatewayIp) return false;
+      const res = await fetchJson(`http://${net.gatewayIp}/api/v1/status`, 1000);
       return !!(res && (res.meshInfo || res.system?.modelId || res.software?.softwareVersion));
     } catch {
       return false;
     }
   }
 
-  async getArpTable() {
+  async getArpTable(subnetPrefix) {
     const map = new Map(); // ip -> mac
     const stdout = await execCommand('arp -a');
     const lines = stdout.split(/\r?\n/);
 
     for (const line of lines) {
-      const match = line.match(/^\s*(192\.168\.86\.\d+)\s+([0-9a-fA-F-]+)/);
+      const match = line.match(/^\s*([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\s+([0-9a-fA-F-]+)/);
       if (match) {
         const ip = match[1];
         const mac = match[2].toLowerCase().replace(/-/g, ':');
-        if (!ip.endsWith('.255')) {
+        const inSubnet = subnetPrefix ? ip.startsWith(subnetPrefix) : true;
+        if (inSubnet && !ip.endsWith('.255') && !ip.endsWith('.0') && !ip.startsWith('224.') && !ip.startsWith('239.')) {
           map.set(ip, mac);
         }
       }
@@ -98,17 +131,19 @@ class GoogleNestProvider extends BaseProvider {
   }
 
   async discoverTopology(wifiInfo) {
-    const arpMap = await this.getArpTable();
-    const candidateIps = new Set(['192.168.86.1']);
+    const net = await this.getNetworkInfo();
+    const gatewayIp = net.gatewayIp || '192.168.1.1';
+    const arpMap = await this.getArpTable(net.subnetPrefix);
+    const candidateIps = new Set([gatewayIp]);
     for (const [ip] of arpMap) {
       candidateIps.add(ip);
     }
 
-    // Always probe 192.168.86.1 first
-    const rootCandidate = await this.probeNestNode('192.168.86.1', arpMap.get('192.168.86.1'));
+    // Always probe dynamically discovered gateway first
+    const rootCandidate = await this.probeNestNode(gatewayIp, arpMap.get(gatewayIp));
 
-    // Probe remaining in parallel
-    const otherIps = Array.from(candidateIps).filter(ip => ip !== '192.168.86.1');
+    // Probe remaining candidates in parallel
+    const otherIps = Array.from(candidateIps).filter(ip => ip !== gatewayIp);
     const otherPromises = otherIps.map(ip => this.probeNestNode(ip, arpMap.get(ip)));
     const otherResults = await Promise.all(otherPromises);
 
@@ -122,11 +157,11 @@ class GoogleNestProvider extends BaseProvider {
     this.discoveredNodes = validNodes;
 
     // Determine root and leaves
-    const rootNode = validNodes.find(n => n.role === 'root') || validNodes.find(n => n.ip === '192.168.86.1') || {
-      ip: '192.168.86.1',
+    const rootNode = validNodes.find(n => n.role === 'root') || validNodes.find(n => n.ip === gatewayIp) || {
+      ip: gatewayIp,
       model: 'Nest Wifi Pro',
       role: 'root',
-      mac: arpMap.get('192.168.86.1')
+      mac: arpMap.get(gatewayIp)
     };
 
     const leafNodes = validNodes.filter(n => n.ip !== rootNode.ip);
@@ -198,12 +233,19 @@ class GoogleNestProvider extends BaseProvider {
       const leafId = `node_nest_${leaf.ip.replace(/\./g, '_')}`;
       const isClientOnThisLeaf = (connectedNode.ip === leaf.ip);
       const override = nodeOverrides[leaf.ip];
+      // Dynamic wired backhaul detection:
+      // 1. Direct hardware carrier flag from satellite (if reported by firmware)
+      // 2. Correlation with root router's physical LAN port:
+      //    In Nest systems, if rootNode.lanLink === true (meaning the primary router's LAN port is linked to a switch or cable)
+      //    and the satellite is an active leaf node with IP assigned, it is auto-detected as wired!
+      // 3. User manual override (if present)
+      const autoWired = Boolean(leaf.ethernetLink || leaf.lanLink || (rootNode.lanLink === true));
       const isWiredBackhaul = (override && typeof override.isWired === 'boolean')
         ? override.isWired
-        : Boolean(leaf.ethernetLink || leaf.lanLink);
+        : autoWired;
 
       const backhaulDesc = isWiredBackhaul 
-        ? `Wired Ethernet Backhaul (${override?.isWired ? 'Confirmed / Cable' : (leaf.ethernetLink ? 'WAN Port' : 'LAN Port')})`
+        ? `Wired Ethernet Backhaul (${override?.isWired ? 'Manual Confirmation' : (rootNode.lanLink ? 'Auto-Detected via Switch' : 'Carrier Active')})`
         : 'Wi-Fi 6E Wireless Mesh';
 
       nodes.push({
@@ -311,7 +353,7 @@ class GoogleNestProvider extends BaseProvider {
   }
 
   async pollNodeTelemetry(node) {
-    if (node.ip && node.ip.startsWith('192.168.86.')) {
+    if (node.ip && node.ip !== 'Local Host' && node.ip !== '1.1.1.1') {
       const res = await this.probeNestNode(node.ip);
       if (res) {
         return {

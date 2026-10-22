@@ -1,5 +1,5 @@
 {
-  "selectedProvider": "google_nest",
+  "selectedProvider": "auto",
   "pingIntervalMs": 1000,
   "historyRetention": 60,
   "targets": {
@@ -16,9 +16,5 @@
     "jitterWarningMs": 25
   },
   "customNodes": [],
-  "nodeOverrides": {
-    "192.168.86.37": {
-      "isWired": true
-    }
-  }
+  "nodeOverrides": {}
 }

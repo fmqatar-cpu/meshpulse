@@ -16,7 +16,7 @@ class BaseProvider {
    *     { id, from: nodeId, to: nodeId, type: 'wifi_client'|'mesh_backhaul'|'ethernet_backhaul'|'wan_link', media, ... }
    *   ],
    *   probeTargets: [
-   *     { id: 'link_client_gateway', host: '192.168.86.1', probeType: 'icmp' },
+   *     { id: 'link_client_gateway', host: 'gateway_ip', probeType: 'icmp' },
    *     ...
    *   ]
    * }

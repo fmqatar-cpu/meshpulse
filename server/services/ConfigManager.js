@@ -21,9 +21,7 @@ const DEFAULT_CONFIG = {
     jitterWarningMs: 25
   },
   customNodes: [],
-  nodeOverrides: {
-    "192.168.86.37": { "isWired": true }
-  }
+  nodeOverrides: {}
 };
 
 class ConfigManager {
