@@ -177,6 +177,21 @@ app.post('/api/config', (req, res) => {
   res.json(updated);
 });
 
+app.post('/api/node-override', async (req, res) => {
+  const { ip, isWired } = req.body;
+  if (!ip) {
+    return res.status(400).json({ error: 'IP address is required' });
+  }
+  configManager.setNodeOverride(ip, { isWired: Boolean(isWired) });
+  await refreshTopology();
+  await tickProbing();
+  broadcast({
+    type: 'TOPOLOGY_UPDATE',
+    data: getFullSnapshot()
+  });
+  res.json({ success: true, nodeOverrides: configManager.get().nodeOverrides });
+});
+
 app.post('/api/rescan', async (req, res) => {
   await refreshTopology();
   await tickProbing();

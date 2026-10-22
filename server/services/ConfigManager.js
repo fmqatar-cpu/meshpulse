@@ -20,7 +20,10 @@ const DEFAULT_CONFIG = {
     rssiCriticalDbm: -82,
     jitterWarningMs: 25
   },
-  customNodes: []
+  customNodes: [],
+  nodeOverrides: {
+    "192.168.86.37": { "isWired": true }
+  }
 };
 
 class ConfigManager {
@@ -61,6 +64,13 @@ class ConfigManager {
 
   update(newFields) {
     this.config = { ...this.config, ...newFields };
+    this.save();
+    return this.config;
+  }
+
+  setNodeOverride(ip, settings) {
+    if (!this.config.nodeOverrides) this.config.nodeOverrides = {};
+    this.config.nodeOverrides[ip] = { ...(this.config.nodeOverrides[ip] || {}), ...settings };
     this.save();
     return this.config;
   }

@@ -1,6 +1,7 @@
 const http = require('http');
 const { exec } = require('child_process');
 const BaseProvider = require('./BaseProvider');
+const configManager = require('../services/ConfigManager');
 
 function execCommand(cmd, timeoutMs = 3000) {
   return new Promise((resolve) => {
@@ -191,12 +192,18 @@ class GoogleNestProvider extends BaseProvider {
     });
 
     // 3. Leaf Nodes (Satellites)
+    const nodeOverrides = configManager.get().nodeOverrides || {};
+
     leafNodes.forEach((leaf, idx) => {
       const leafId = `node_nest_${leaf.ip.replace(/\./g, '_')}`;
       const isClientOnThisLeaf = (connectedNode.ip === leaf.ip);
-      const isWiredBackhaul = Boolean(leaf.ethernetLink || leaf.lanLink);
+      const override = nodeOverrides[leaf.ip];
+      const isWiredBackhaul = (override && typeof override.isWired === 'boolean')
+        ? override.isWired
+        : Boolean(leaf.ethernetLink || leaf.lanLink);
+
       const backhaulDesc = isWiredBackhaul 
-        ? `Wired Ethernet Backhaul (${leaf.ethernetLink ? 'WAN Port' : 'LAN Port'})`
+        ? `Wired Ethernet Backhaul (${override?.isWired ? 'Confirmed / Cable' : (leaf.ethernetLink ? 'WAN Port' : 'LAN Port')})`
         : 'Wi-Fi 6E Wireless Mesh';
 
       nodes.push({
@@ -211,6 +218,7 @@ class GoogleNestProvider extends BaseProvider {
         uptime: leaf.uptime,
         backhaulType: backhaulDesc,
         isWiredBackhaul,
+        isOverridden: (override && typeof override.isWired === 'boolean'),
         wanPortLinked: Boolean(leaf.ethernetLink),
         lanPortLinked: Boolean(leaf.lanLink),
         meshChannel: leaf.meshChannel,
@@ -224,7 +232,7 @@ class GoogleNestProvider extends BaseProvider {
         id: backhaulLinkId,
         from: leafId,
         to: rootNodeId,
-        name: isWiredBackhaul ? 'Wired Ethernet' : '6 GHz Mesh Backhaul',
+        name: isWiredBackhaul ? 'Wired Ethernet (1 Gbps)' : '6 GHz Mesh Backhaul',
         type: isWiredBackhaul ? 'ethernet_backhaul' : 'mesh_backhaul',
         media: isWiredBackhaul ? 'Ethernet' : 'Wireless 6GHz'
       });

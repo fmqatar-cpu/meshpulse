@@ -15,5 +15,10 @@
     "rssiCriticalDbm": -82,
     "jitterWarningMs": 25
   },
-  "customNodes": []
+  "customNodes": [],
+  "nodeOverrides": {
+    "192.168.86.37": {
+      "isWired": true
+    }
+  }
 }

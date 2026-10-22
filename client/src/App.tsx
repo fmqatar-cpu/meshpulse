@@ -396,6 +396,19 @@ export default function App() {
     }
   };
 
+  const handleToggleNodeWired = async (ip: string, currentIsWired: boolean) => {
+    try {
+      await fetch('/api/node-override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip, isWired: !currentIsWired })
+      });
+      await fetchStatus();
+    } catch (e) {
+      console.error('Failed to update node override:', e);
+    }
+  };
+
   const addCustomNode = () => {
     if (!customIpInput.trim()) return;
     setCustomNodes(prev => [
@@ -719,8 +732,10 @@ export default function App() {
                             <span className="text-xs font-bold text-white truncate">{sat.name}</span>
                           </div>
                           <div className="text-[10px] text-slate-400 font-mono truncate">{sat.ip}</div>
-                          <div className="text-[9px] text-indigo-400 font-mono truncate mt-0.5">
-                            {sat.backhaulType || 'Mesh Backhaul'}
+                          <div className={`text-[9px] font-mono truncate mt-0.5 ${
+                            sat.isWiredBackhaul ? 'text-emerald-400 font-bold' : 'text-indigo-400'
+                          }`}>
+                            {sat.isWiredBackhaul ? '⚡ Wired Ethernet (1G)' : (sat.backhaulType || 'Mesh Backhaul')}
                           </div>
                           {sat.isCurrentAP && (
                             <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
@@ -738,16 +753,32 @@ export default function App() {
                   </div>
 
                   {/* Animated Arrow / Link 2 (Backhaul) */}
-                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[64px]">
-                    <span className="text-slate-400 text-[9px]">Backhaul</span>
-                    <div className="px-1.5 py-0.5 rounded font-bold border bg-indigo-950/60 text-indigo-300 border-indigo-600/40 text-center">
-                      6 GHz
-                    </div>
-                    <div className="w-12 h-0.5 bg-gradient-to-r from-indigo-500 to-purple-500 relative">
-                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-300 absolute -top-0.5" />
-                    </div>
-                    <span className="text-[8px] text-slate-500">Ch {topology.systemInfo?.meshChannel || '197'}</span>
-                  </div>
+                  {(() => {
+                    const satellites = topology.nodes?.filter((n: any) => n.type === 'satellite') || [];
+                    const activeSat = satellites.find((s: any) => s.isCurrentAP) || satellites[0];
+                    const isWired = activeSat?.isWiredBackhaul || satellites.some((s: any) => s.isWiredBackhaul);
+
+                    return (
+                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                        <span className="text-slate-400 text-[9px]">Backhaul</span>
+                        <div className={`px-1.5 py-0.5 rounded font-bold border text-center transition-all ${
+                          isWired
+                            ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 shadow-sm shadow-emerald-500/20'
+                            : 'bg-indigo-950/60 text-indigo-300 border-indigo-600/40'
+                        }`}>
+                          {isWired ? '⚡ Wired' : '6 GHz'}
+                        </div>
+                        <div className={`w-12 h-0.5 relative ${
+                          isWired ? 'bg-gradient-to-r from-emerald-500 to-purple-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'
+                        }`}>
+                          <div className={`w-1.5 h-1.5 rounded-full absolute -top-0.5 ${isWired ? 'bg-emerald-300' : 'bg-indigo-300'}`} />
+                        </div>
+                        <span className="text-[8px] text-slate-500">
+                          {isWired ? '1 Gbps RJ45' : `Ch ${topology.systemInfo?.meshChannel || '197'}`}
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* 3. Main Router (Root Gateway) */}
                   {(() => {
@@ -834,84 +865,105 @@ export default function App() {
                   <span>Node Inspector</span>
                 </h3>
 
-                {selectedNode ? (
-                  <div className="space-y-3">
-                    <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
-                      <div className="text-xs text-slate-400">Node Label</div>
-                      <div className="text-sm font-bold text-white mt-0.5">{selectedNode.name}</div>
-                      <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {selectedNode.role}</div>
-                    </div>
+                {(() => {
+                  const node = selectedNode 
+                    ? (topology.nodes?.find((n: any) => n.id === selectedNode.id || n.ip === selectedNode.ip) || selectedNode)
+                    : null;
+                  if (!node) {
+                    return (
+                      <div className="py-12 text-center text-xs text-slate-500">
+                        Click any node in the topology diagram to inspect its backhaul telemetry, MAC address, and firmware details.
+                      </div>
+                    );
+                  }
 
-                    <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                      <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                        <span className="text-slate-500 block text-[10px]">IP ADDRESS</span>
-                        <span className="text-slate-200 font-bold">{selectedNode.ip}</span>
+                  return (
+                    <div className="space-y-3">
+                      <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
+                        <div className="text-xs text-slate-400">Node Label</div>
+                        <div className="text-sm font-bold text-white mt-0.5">{node.name}</div>
+                        <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {node.role}</div>
                       </div>
-                      <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                        <span className="text-slate-500 block text-[10px]">HARDWARE MODEL</span>
-                        <span className="text-slate-200 font-bold">{selectedNode.model || 'Nest Wifi Pro'}</span>
-                      </div>
-                      {selectedNode.mac && (
+
+                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                         <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                          <span className="text-slate-500 block text-[10px]">MAC ADDRESS</span>
-                          <span className="text-slate-200 font-bold">{selectedNode.mac}</span>
+                          <span className="text-slate-500 block text-[10px]">IP ADDRESS</span>
+                          <span className="text-slate-200 font-bold">{node.ip}</span>
                         </div>
-                      )}
-                      {selectedNode.uptime && (
                         <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                          <span className="text-slate-500 block text-[10px]">DEVICE UPTIME</span>
-                          <span className="text-emerald-400 font-bold">{formatUptime(selectedNode.uptime)}</span>
+                          <span className="text-slate-500 block text-[10px]">HARDWARE MODEL</span>
+                          <span className="text-slate-200 font-bold">{node.model || 'Nest Wifi Pro'}</span>
                         </div>
-                      )}
-                      {selectedNode.softwareVersion && (
-                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                          <span className="text-slate-500 block text-[10px]">SOFTWARE FIRMWARE</span>
-                          <span className="text-slate-200">{selectedNode.softwareVersion}</span>
-                        </div>
-                      )}
-                      {selectedNode.backhaulType && (
-                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                          <span className="text-slate-500 block text-[10px]">ACTIVE BACKHAUL MEDIUM</span>
-                          <span className="text-cyan-400 font-bold">{selectedNode.backhaulType}</span>
-                        </div>
-                      )}
-                      {selectedNode.type === 'satellite' && selectedNode.wanPortLinked !== undefined && (
-                        <>
+                        {node.mac && (
                           <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                            <span className="text-slate-500 block text-[10px]">WAN PORT (GLOBE)</span>
-                            <span className={`font-bold ${selectedNode.wanPortLinked ? 'text-emerald-400' : 'text-slate-500'}`}>
-                              {selectedNode.wanPortLinked ? 'Carrier Active' : 'Carrier Down'}
+                            <span className="text-slate-500 block text-[10px]">MAC ADDRESS</span>
+                            <span className="text-slate-200 font-bold">{node.mac}</span>
+                          </div>
+                        )}
+                        {node.uptime && (
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                            <span className="text-slate-500 block text-[10px]">DEVICE UPTIME</span>
+                            <span className="text-emerald-400 font-bold">{formatUptime(node.uptime)}</span>
+                          </div>
+                        )}
+                        {node.softwareVersion && (
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
+                            <span className="text-slate-500 block text-[10px]">SOFTWARE FIRMWARE</span>
+                            <span className="text-slate-200">{node.softwareVersion}</span>
+                          </div>
+                        )}
+                        {node.backhaulType && (
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
+                            <span className="text-slate-500 block text-[10px]">ACTIVE BACKHAUL MEDIUM</span>
+                            <span className={`font-bold ${node.isWiredBackhaul ? 'text-emerald-400' : 'text-cyan-400'}`}>
+                              {node.backhaulType}
                             </span>
                           </div>
-                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                            <span className="text-slate-500 block text-[10px]">LAN PORT (&lt;...&gt;)</span>
-                            <span className={`font-bold ${selectedNode.lanPortLinked ? 'text-emerald-400' : 'text-slate-500'}`}>
-                              {selectedNode.lanPortLinked ? 'Carrier Active' : 'Carrier Down'}
-                            </span>
-                          </div>
-                          {!selectedNode.wanPortLinked && !selectedNode.lanPortLinked && (
-                            <div className="p-3 rounded-lg bg-amber-950/40 border border-amber-800/60 col-span-2 text-xs">
-                              <span className="text-amber-300 font-bold block mb-1">⚠️ Ethernet Cable Not Detected by Hardware</span>
-                              <p className="text-slate-300 text-[11px] leading-relaxed">
-                                The Nest Point's internal PHY reports <strong>no electrical carrier</strong> on either RJ-45 port, so it silently fell back to 6 GHz wireless mesh.
-                              </p>
-                              <ul className="text-slate-400 text-[10px] mt-1.5 list-disc pl-4 space-y-0.5">
-                                <li>Check if the cable is plugged into the <strong>Globe</strong> port or the <strong>&lt;...&gt;</strong> port.</li>
-                                <li>Verify the other end is connected to the primary router or an active switch.</li>
-                                <li>Managed switches with 802.1d STP often disable Nest mesh wired ports.</li>
-                                <li>Reboot the satellite point after connecting the cable.</li>
-                              </ul>
-                            </div>
-                          )}
-                        </>
-                      )}
+                        )}
+
+                        {node.type === 'satellite' && (
+                          <>
+                            {node.isWiredBackhaul ? (
+                              <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <span className="text-emerald-300 font-bold block">⚡ Wired Ethernet Backhaul Active</span>
+                                    <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
+                                      Point is connected via physical Ethernet cable back to root router at full gigabit speed.
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={() => handleToggleNodeWired(node.ip, true)}
+                                    className="px-2.5 py-1 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shrink-0"
+                                  >
+                                    Switch to Wi-Fi
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-3 rounded-lg bg-slate-900/90 border border-indigo-900/60 col-span-2 text-xs">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <span className="text-indigo-300 font-bold block">📶 Wi-Fi 6E Wireless Mesh Active</span>
+                                    <p className="text-slate-400 text-[11px] mt-1 leading-relaxed">
+                                      Nest Wifi Pro firmware (3.78+) bridges wired satellite ports into the internal switch without reporting it via legacy local v1 status. If this node is connected via Ethernet cable, click to activate Wired mode:
+                                    </p>
+                                  </div>
+                                  <button
+                                    onClick={() => handleToggleNodeWired(node.ip, false)}
+                                    className="px-3 py-1.5 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white shadow transition flex items-center gap-1.5 shrink-0"
+                                  >
+                                    ⚡ Set as Wired
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="py-12 text-center text-xs text-slate-500">
-                    Click any node in the topology diagram to inspect its backhaul telemetry, MAC address, and firmware details.
-                  </div>
-                )}
+                  );
+                })()}
               </div>
 
               {/* Dynamic Composite Health Summary */}
