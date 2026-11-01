@@ -154,20 +154,34 @@ export default function App() {
       setWsConnected(true);
       setActiveProvider({
         id: 'android_native',
-        name: 'Android Native Mesh Scanner',
-        description: 'Using Android WifiManager and native ICMP sockets'
+        name: 'Android Mesh Engine',
+        description: 'Native Wi-Fi scanning, subnet topology sweep, and ICMP telemetry'
       });
+
+      // Load saved Android config from localStorage
+      try {
+        const saved = localStorage.getItem('meshpulse_android_config');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.selectedProvider) setSettingsProvider(parsed.selectedProvider);
+          if (parsed.pingIntervalMs) setSettingsInterval(parsed.pingIntervalMs);
+          if (parsed.customNodes) setCustomNodes(parsed.customNodes);
+        }
+      } catch (e) {}
 
       const androidHistory: Record<string, { t: number; ms: number | null }[]> = {
         link_client_ap: [],
         link_gateway_wan: []
       };
 
+      let cachedDiscoveredNodes: any[] = [];
+      let lastMeshSweep = 0;
+
       const runAndroidTick = () => {
         try {
           const bridge = (window as any).AndroidBridge;
           const wifiRaw = bridge.getWifiInfo();
-          const wifiParsed = JSON.parse(wifiRaw);
+          const wifiParsed = JSON.parse(wifiRaw || '{}');
 
           if (!wifiParsed.connected) {
             setSnapshot((prev: any) => ({
@@ -185,10 +199,29 @@ export default function App() {
           }
 
           const gatewayIp = wifiParsed.gatewayIp || '192.168.1.1';
+          const subnetPrefix = gatewayIp.substring(0, gatewayIp.lastIndexOf('.') + 1);
+
+          // Periodic or triggered mesh discovery sweep
+          const now = Date.now();
+          if (now - lastMeshSweep > 12000 || cachedDiscoveredNodes.length === 0) {
+            lastMeshSweep = now;
+            try {
+              const rawDiscovered = bridge.discoverMeshNodes(gatewayIp, subnetPrefix);
+              cachedDiscoveredNodes = JSON.parse(rawDiscovered || '[]');
+            } catch (e) {
+              // discovery fallback
+            }
+          }
+
+          // Get visible BSSIDs
+          let visibleBssids: any[] = [];
+          try {
+            visibleBssids = JSON.parse(bridge.getVisibleBssids() || '[]');
+          } catch (e) {}
+
           const apPingRaw = JSON.parse(bridge.ping(gatewayIp, 1));
           const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
 
-          const now = Date.now();
           const apMs = apPingRaw.success ? Math.round(apPingRaw.latency) : null;
           const wanMs = wanPingRaw.success ? Math.round(wanPingRaw.latency) : null;
 
@@ -222,54 +255,220 @@ export default function App() {
             link_gateway_wan: calcStats('link_gateway_wan', '1.1.1.1', androidHistory.link_gateway_wan)
           };
 
-          // Try probing router API
-          let routerModel = 'Mesh Gateway';
+          // Load local overrides
+          let nodeOverrides: Record<string, any> = {};
           try {
-            const httpRes = JSON.parse(bridge.fetchHttp(`http://${gatewayIp}/api/v1/status`, 800));
-            if (httpRes.success && httpRes.data) {
-              const rData = JSON.parse(httpRes.data);
-              if (rData.system?.modelId) routerModel = rData.system.modelId;
-            }
-          } catch (e) {
-            // fallback
-          }
+            nodeOverrides = JSON.parse(localStorage.getItem('meshpulse_android_node_overrides') || '{}');
+          } catch (e) {}
 
-          const nodes = [
-            {
-              id: 'node_client',
-              name: 'Android Phone',
-              type: 'client',
-              role: 'client',
-              ip: wifiParsed.localIp,
-              connectedBssid: wifiParsed.bssid,
-              signal: wifiParsed.signal,
-              rssi: wifiParsed.rssi,
-              band: wifiParsed.band,
+          const nodes: any[] = [];
+          const linksArr: any[] = [];
+
+          // 1. Client Phone Node
+          nodes.push({
+            id: 'node_client',
+            name: 'Android Phone',
+            type: 'client',
+            role: 'client',
+            ip: wifiParsed.localIp,
+            connectedBssid: wifiParsed.bssid,
+            signal: wifiParsed.signal,
+            rssi: wifiParsed.rssi,
+            band: wifiParsed.band,
+            status: 'online'
+          });
+
+          // 2. Mesh Topology Assembly
+          if (cachedDiscoveredNodes.length > 0) {
+            const rootCandidate = cachedDiscoveredNodes.find(n => n.role === 'root') ||
+                                  cachedDiscoveredNodes.find(n => n.ip === gatewayIp) || {
+              ip: gatewayIp,
+              model: 'Nest Wifi Pro',
+              role: 'root',
+              hardwareId: ''
+            };
+
+            const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
+
+            // Determine which node the phone is connected to using BSSID MAC prefix matching
+            const clientBssid = (wifiParsed.bssid || '').toLowerCase();
+            let connectedNode = rootCandidate;
+
+            if (clientBssid) {
+              const bssidClean = clientBssid.replace(/[:-]/g, '');
+              const match = leafCandidates.find(leaf => {
+                const macClean = (leaf.hardwareId || leaf.mac || '').toLowerCase().replace(/[:-]/g, '');
+                return macClean.length >= 8 && bssidClean.startsWith(macClean.slice(0, 8));
+              });
+              if (match) {
+                connectedNode = match;
+              }
+            }
+
+            const rootNodeId = `node_nest_${rootCandidate.ip.replace(/\./g, '_')}`;
+            const isClientOnRoot = (connectedNode.ip === rootCandidate.ip);
+
+            nodes.push({
+              id: rootNodeId,
+              name: `${rootCandidate.model || 'Nest Wifi Pro'} (Main Router)`,
+              type: 'root',
+              role: 'root',
+              ip: rootCandidate.ip,
+              model: rootCandidate.model,
+              softwareVersion: rootCandidate.softwareVersion,
+              uptime: rootCandidate.uptime,
+              meshChannel: rootCandidate.meshChannel,
+              isCurrentAP: isClientOnRoot,
               status: 'online'
-            },
-            {
-              id: 'node_gateway',
-              name: `${routerModel} (${gatewayIp})`,
+            });
+
+            leafCandidates.forEach((leaf, idx) => {
+              const leafId = `node_nest_${leaf.ip.replace(/\./g, '_')}`;
+              const isClientOnThisLeaf = (connectedNode.ip === leaf.ip);
+              const override = nodeOverrides[leaf.ip];
+              const autoWired = Boolean(leaf.ethernetLink || leaf.lanLink || rootCandidate.lanLink);
+              const isWiredBackhaul = (override && typeof override.isWired === 'boolean')
+                ? override.isWired
+                : autoWired;
+
+              const backhaulDesc = isWiredBackhaul
+                ? `Wired Ethernet Backhaul (${override?.isWired ? 'Manual' : (rootCandidate.lanLink ? 'Switch Link' : 'Active')})`
+                : 'Wi-Fi 6E Wireless Mesh';
+
+              nodes.push({
+                id: leafId,
+                name: `Nest Point ${idx + 1} (${leaf.ip})`,
+                type: 'satellite',
+                role: 'leaf',
+                ip: leaf.ip,
+                model: leaf.model,
+                softwareVersion: leaf.softwareVersion,
+                uptime: leaf.uptime,
+                backhaulType: backhaulDesc,
+                isWiredBackhaul,
+                isOverridden: (override && typeof override.isWired === 'boolean'),
+                isCurrentAP: isClientOnThisLeaf,
+                status: 'online'
+              });
+
+              linksArr.push({
+                id: `link_backhaul_${leaf.ip.replace(/\./g, '_')}`,
+                from: leafId,
+                to: rootNodeId,
+                name: isWiredBackhaul ? '⚡ Wired Ethernet (1G)' : '📶 Wi-Fi 6E Wireless Mesh',
+                type: isWiredBackhaul ? 'ethernet_backhaul' : 'mesh_backhaul',
+                media: isWiredBackhaul ? 'Ethernet 1000BASE-T' : 'Wi-Fi 6E'
+              });
+            });
+
+            // Connect phone to active AP (either Leaf or Root)
+            const targetApNodeId = isClientOnRoot ? rootNodeId : `node_nest_${connectedNode.ip.replace(/\./g, '_')}`;
+            linksArr.push({
+              id: 'link_client_ap',
+              from: 'node_client',
+              to: targetApNodeId,
+              name: `Wi-Fi Link (${wifiParsed.signal || 100}%)`,
+              type: 'wifi_client',
+              media: 'Wi-Fi'
+            });
+
+            // Connect root to internet
+            linksArr.push({
+              id: 'link_gateway_wan',
+              from: rootNodeId,
+              to: 'node_internet',
+              name: 'WAN Uplink',
+              type: 'wan_link',
+              media: 'Broadband'
+            });
+
+          } else {
+            // Generic Mesh / BSSID Fallback
+            const matchingBssids = visibleBssids.filter((b: any) =>
+              b.ssid && wifiParsed.ssid && (b.ssid === wifiParsed.ssid || b.ssid === `"${wifiParsed.ssid}"`)
+            );
+
+            const gatewayNodeId = 'node_gateway';
+            const isClientOnGateway = matchingBssids.length <= 1;
+
+            nodes.push({
+              id: gatewayNodeId,
+              name: `Main Router (${gatewayIp})`,
               type: 'root',
               role: 'root',
               ip: gatewayIp,
-              model: routerModel,
+              model: 'Mesh Gateway',
+              isCurrentAP: isClientOnGateway,
               status: 'online'
-            },
-            {
-              id: 'node_internet',
-              name: 'Internet Gateway',
-              type: 'wan',
-              role: 'internet',
-              ip: '1.1.1.1',
-              status: 'online'
-            }
-          ];
+            });
 
-          const linksArr = [
-            { id: 'link_client_ap', from: 'node_client', to: 'node_gateway', name: 'Wi-Fi Link', type: 'wifi_client', media: 'Wi-Fi' },
-            { id: 'link_gateway_wan', from: 'node_gateway', to: 'node_internet', name: 'WAN Link', type: 'wan_link', media: 'Broadband' }
-          ];
+            if (matchingBssids.length > 1) {
+              matchingBssids.forEach((bssidObj, idx) => {
+                const isCurrent = (wifiParsed.bssid && bssidObj.bssid.toLowerCase() === wifiParsed.bssid.toLowerCase());
+                const apId = `node_ap_${idx + 1}`;
+                nodes.push({
+                  id: apId,
+                  name: isCurrent ? `Connected AP (${bssidObj.bssid.slice(-8)})` : `Mesh Point ${idx + 1} (${bssidObj.bssid.slice(-8)})`,
+                  type: 'satellite',
+                  role: 'leaf',
+                  bssid: bssidObj.bssid,
+                  signal: bssidObj.signal,
+                  rssi: bssidObj.rssi,
+                  band: bssidObj.band,
+                  isCurrentAP: isCurrent,
+                  status: 'online'
+                });
+
+                linksArr.push({
+                  id: `link_backhaul_ap_${idx + 1}`,
+                  from: apId,
+                  to: gatewayNodeId,
+                  name: 'Wireless Mesh Backhaul',
+                  type: 'mesh_backhaul',
+                  media: 'Wi-Fi Backhaul'
+                });
+              });
+
+              // Link phone to connected satellite or first AP
+              const activeAp = nodes.find(n => n.type === 'satellite' && n.isCurrentAP) || nodes.find(n => n.type === 'satellite');
+              linksArr.push({
+                id: 'link_client_ap',
+                from: 'node_client',
+                to: activeAp ? activeAp.id : gatewayNodeId,
+                name: `Wi-Fi Link (${wifiParsed.signal || 100}%)`,
+                type: 'wifi_client',
+                media: 'Wi-Fi'
+              });
+            } else {
+              linksArr.push({
+                id: 'link_client_ap',
+                from: 'node_client',
+                to: gatewayNodeId,
+                name: `Wi-Fi Link (${wifiParsed.signal || 100}%)`,
+                type: 'wifi_client',
+                media: 'Wi-Fi'
+              });
+            }
+
+            linksArr.push({
+              id: 'link_gateway_wan',
+              from: gatewayNodeId,
+              to: 'node_internet',
+              name: 'WAN Uplink',
+              type: 'wan_link',
+              media: 'Broadband'
+            });
+          }
+
+          // 3. Internet Gateway Node
+          nodes.push({
+            id: 'node_internet',
+            name: 'Internet Gateway',
+            type: 'wan',
+            role: 'internet',
+            ip: '1.1.1.1',
+            status: 'online'
+          });
 
           let healthScore = 100;
           if (linkStats.link_gateway_wan.lossPct > 0) healthScore -= linkStats.link_gateway_wan.lossPct * 2;
@@ -364,6 +563,14 @@ export default function App() {
   const handleRescan = async () => {
     setIsRescanning(true);
     try {
+      if (typeof (window as any).AndroidBridge !== 'undefined') {
+        const bridge = (window as any).AndroidBridge;
+        try {
+          if (bridge.triggerScan) bridge.triggerScan();
+        } catch (e) {}
+        setTimeout(() => setIsRescanning(false), 800);
+        return;
+      }
       await fetch('/api/rescan', { method: 'POST' });
       await fetchStatus();
     } catch (e) {
@@ -375,6 +582,18 @@ export default function App() {
 
   const handleSaveSettings = async () => {
     try {
+      const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+      if (isAndroid) {
+        // Save locally for Android native mode
+        localStorage.setItem('meshpulse_android_config', JSON.stringify({
+          selectedProvider: settingsProvider,
+          pingIntervalMs: Number(settingsInterval),
+          customNodes
+        }));
+        setIsSettingsOpen(false);
+        return;
+      }
+
       await fetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -396,11 +615,22 @@ export default function App() {
       handleRescan();
     } catch (e) {
       console.error('Failed to save settings:', e);
+      setIsSettingsOpen(false);
     }
   };
 
   const handleToggleNodeWired = async (ip: string, currentIsWired: boolean) => {
     try {
+      const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+      if (isAndroid) {
+        let overrides: Record<string, any> = {};
+        try {
+          overrides = JSON.parse(localStorage.getItem('meshpulse_android_node_overrides') || '{}');
+        } catch (e) {}
+        overrides[ip] = { isWired: !currentIsWired };
+        localStorage.setItem('meshpulse_android_node_overrides', JSON.stringify(overrides));
+        return;
+      }
       await fetch('/api/node-override', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -482,46 +712,48 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans pb-12">
       {/* Top Navbar */}
-      <header className="border-b border-slate-800/80 bg-slate-900/70 backdrop-blur-md sticky top-0 z-40 px-6 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-            <Radio className="w-5 h-5 text-white" />
+      <header className="border-b border-slate-800/80 bg-slate-900/90 backdrop-blur-md sticky top-0 z-40 px-2.5 sm:px-6 py-2 sm:py-3 flex items-center justify-between gap-1.5 sm:gap-2 w-full">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-cyan-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20 shrink-0">
+            <Radio className="w-4 h-4 text-white" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1 sm:gap-1.5 flex-nowrap">
+              <span className="font-extrabold text-sm sm:text-base tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400 shrink-0">
                 MeshPulse
               </span>
-              <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              <span className="text-[10px] font-mono px-1 py-0.2 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
                 v{pkg.version}
               </span>
-              <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+              <span className={`inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-semibold px-1.5 py-0.5 rounded-full border shrink-0 ${
                 overallStatus === 'HEALTHY'
                   ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                   : overallStatus === 'DEGRADED'
                   ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
                   : 'bg-rose-500/10 text-rose-400 border-rose-500/30'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${
+                <span className={`w-1.5 h-1.5 rounded-full ${
                   overallStatus === 'HEALTHY' ? 'bg-emerald-400 animate-pulse' :
                   overallStatus === 'DEGRADED' ? 'bg-amber-400 animate-pulse' : 'bg-rose-400 animate-ping'
                 }`} />
-                {overallStatus} ({healthScore}%)
+                <span className="hidden sm:inline">{overallStatus}</span>
+                <span>({healthScore}%)</span>
               </span>
             </div>
-            <p className="text-xs text-slate-400 flex items-center gap-1.5">
-              <span>System: <strong className="text-slate-200">{activeProvider.name}</strong></span>
+            <p className="text-[10px] sm:text-[11px] text-slate-400 flex items-center gap-1.5 truncate mt-0.5">
+              <span className="truncate">System: <strong className="text-slate-200">{activeProvider.name}</strong></span>
               <span>•</span>
-              <span className="flex items-center gap-1">
+              <span className="flex items-center gap-1 shrink-0">
                 <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                {wsConnected ? 'Live 1s Polling' : 'Connecting...'}
+                <span className="hidden sm:inline">{wsConnected ? 'Live 1s' : 'Connecting'}</span>
+                <span className="sm:hidden">{wsConnected ? 'Live' : 'Off'}</span>
               </span>
             </p>
           </div>
         </div>
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {wifi.connected && (
             <div className="hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/60 text-xs">
               <div className="flex items-center gap-1.5 text-slate-300 font-medium">
@@ -538,18 +770,21 @@ export default function App() {
           <button
             onClick={handleRescan}
             disabled={isRescanning}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 text-xs font-semibold transition"
+            aria-label="Rescan Network"
+            className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 text-xs font-semibold transition"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRescanning ? 'animate-spin text-cyan-400' : ''}`} />
-            <span>{isRescanning ? 'Scanning...' : 'Rescan'}</span>
+            <span className="hidden sm:inline">{isRescanning ? 'Scanning...' : 'Rescan'}</span>
           </button>
 
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-indigo-600/20 transition"
+            aria-label="Configure Mesh System"
+            className="flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-semibold shadow-md shadow-indigo-600/20 transition"
           >
             <Settings className="w-3.5 h-3.5" />
-            <span>Configure</span>
+            <span className="hidden sm:inline">Configure</span>
+            <span className="sm:hidden">Config</span>
           </button>
         </div>
       </header>
@@ -1216,14 +1451,16 @@ export default function App() {
 
             <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-800">
               <button
+                type="button"
                 onClick={() => setIsSettingsOpen(false)}
-                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+                className="px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-xs font-semibold text-slate-300 transition"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleSaveSettings}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white shadow-lg shadow-indigo-600/20"
+                className="px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white shadow-lg shadow-indigo-600/20 transition"
               >
                 Apply & Save Settings
               </button>
