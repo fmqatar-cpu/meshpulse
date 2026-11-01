@@ -86,61 +86,88 @@ class AndroidBridge(private val context: Context) {
     @JavascriptInterface
     fun ping(host: String, timeoutSec: Int): String {
         val result = JSONObject()
-        try {
-            val start = System.currentTimeMillis()
-            val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -W $timeoutSec $host")
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            val output = StringBuilder()
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                output.append(line).append("\n")
-            }
-            val exitCode = process.waitFor()
-            val end = System.currentTimeMillis()
+        val future = executor.submit<String> {
+            try {
+                val start = System.currentTimeMillis()
+                val process = Runtime.getRuntime().exec("/system/bin/ping -c 1 -W $timeoutSec $host")
+                val reader = BufferedReader(InputStreamReader(process.inputStream))
+                val output = StringBuilder()
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    output.append(line).append("\n")
+                }
+                val exitCode = process.waitFor()
+                val end = System.currentTimeMillis()
 
-            val text = output.toString()
-            if (exitCode == 0) {
-                val match = Regex("time=([0-9.]+)").find(text)
-                val latency = match?.groupValues?.get(1)?.toDoubleOrNull() ?: (end - start).toDouble()
-                result.put("success", true)
-                result.put("latency", latency)
-            } else {
-                result.put("success", false)
-                result.put("latency", null)
+                val text = output.toString()
+                val inner = JSONObject()
+                if (exitCode == 0) {
+                    val match = Regex("time=([0-9.]+)").find(text)
+                    val latency = match?.groupValues?.get(1)?.toDoubleOrNull() ?: (end - start).toDouble()
+                    inner.put("success", true)
+                    inner.put("latency", latency)
+                } else {
+                    inner.put("success", false)
+                    inner.put("latency", null)
+                }
+                inner.toString()
+            } catch (e: Exception) {
+                val err = JSONObject()
+                err.put("success", false)
+                err.put("error", e.message ?: "Ping execution error")
+                err.toString()
             }
+        }
+        return try {
+            future.get((timeoutSec * 1000L) + 1500L, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             result.put("success", false)
-            result.put("error", e.message)
+            result.put("error", e.message ?: "Timeout")
+            result.toString()
         }
-        return result.toString()
     }
 
     @JavascriptInterface
     fun fetchHttp(urlStr: String, timeoutMs: Int): String {
         val result = JSONObject()
-        try {
-            val url = URL(urlStr)
-            val conn = url.openConnection() as HttpURLConnection
-            conn.connectTimeout = timeoutMs
-            conn.readTimeout = timeoutMs
-            conn.requestMethod = "GET"
-            conn.setRequestProperty("Accept", "application/json")
+        val future = executor.submit<String> {
+            try {
+                val url = URL(urlStr)
+                val conn = url.openConnection() as HttpURLConnection
+                conn.connectTimeout = timeoutMs
+                conn.readTimeout = timeoutMs
+                conn.requestMethod = "GET"
+                conn.setRequestProperty("Accept", "application/json")
 
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val reader = BufferedReader(InputStreamReader(stream))
-            val content = reader.readText()
-            reader.close()
-            conn.disconnect()
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val content = if (stream != null) {
+                    val reader = BufferedReader(InputStreamReader(stream))
+                    val text = reader.readText()
+                    reader.close()
+                    text
+                } else ""
+                conn.disconnect()
 
-            result.put("status", code)
-            result.put("data", content)
-            result.put("success", code in 200..299)
+                val inner = JSONObject()
+                inner.put("status", code)
+                inner.put("data", content)
+                inner.put("success", code in 200..299)
+                inner.toString()
+            } catch (e: Exception) {
+                val err = JSONObject()
+                err.put("success", false)
+                err.put("error", e.message ?: "Network error")
+                err.toString()
+            }
+        }
+        return try {
+            future.get(timeoutMs + 1000L, java.util.concurrent.TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             result.put("success", false)
-            result.put("error", e.message)
+            result.put("error", e.message ?: "Timeout")
+            result.toString()
         }
-        return result.toString()
     }
 
     @JavascriptInterface

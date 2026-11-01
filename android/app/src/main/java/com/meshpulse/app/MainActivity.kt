@@ -37,12 +37,23 @@ class MainActivity : ComponentActivity() {
         settings.databaseEnabled = true
         settings.allowFileAccess = true
         settings.allowContentAccess = true
+        settings.allowFileAccessFromFileURLs = true
+        settings.allowUniversalAccessFromFileURLs = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
         settings.cacheMode = WebSettings.LOAD_NO_CACHE
 
         webView.setBackgroundColor(Color.parseColor("#0b0f19"))
-        webView.webViewClient = WebViewClient()
-        webView.webChromeClient = WebChromeClient()
+        webView.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+                android.util.Log.e("MeshPulse", "WebView Error: $description ($errorCode) for $failingUrl")
+            }
+        }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(message: android.webkit.ConsoleMessage?): Boolean {
+                android.util.Log.d("MeshPulseConsole", "${message?.message()} -- From line ${message?.lineNumber()} of ${message?.sourceId()}")
+                return true
+            }
+        }
 
         // Attach native Android bridge
         val bridge = AndroidBridge(this)

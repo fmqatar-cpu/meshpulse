@@ -41,6 +41,7 @@ class GoogleNestProvider extends BaseProvider {
       'Direct API discovery for Google Wifi & Nest Wifi Pro systems via local telemetry endpoints.'
     );
     this.discoveredNodes = [];
+    this.knownNestIps = new Set();
   }
 
   async getNetworkInfo() {
@@ -130,11 +131,31 @@ class GoogleNestProvider extends BaseProvider {
     return null;
   }
 
+  async sweepSubnet(subnetPrefix) {
+    if (!subnetPrefix) return [];
+    const foundIps = [];
+    const promises = [];
+    for (let i = 1; i <= 254; i++) {
+      const ip = `${subnetPrefix}${i}`;
+      promises.push(
+        fetchJson(`http://${ip}/api/v1/status`, 800)
+          .then(res => {
+            if (res && res.system && res.system.modelId) {
+              foundIps.push(ip);
+            }
+          })
+          .catch(() => {})
+      );
+    }
+    await Promise.all(promises);
+    return foundIps;
+  }
+
   async discoverTopology(wifiInfo) {
     const net = await this.getNetworkInfo();
     const gatewayIp = net.gatewayIp || '192.168.1.1';
     const arpMap = await this.getArpTable(net.subnetPrefix);
-    const candidateIps = new Set([gatewayIp]);
+    const candidateIps = new Set([gatewayIp, ...this.knownNestIps]);
     for (const [ip] of arpMap) {
       candidateIps.add(ip);
     }
@@ -142,47 +163,83 @@ class GoogleNestProvider extends BaseProvider {
     // Always probe dynamically discovered gateway first
     const rootCandidate = await this.probeNestNode(gatewayIp, arpMap.get(gatewayIp));
 
-    // Probe remaining candidates in parallel
+    // Probe known & ARP candidates in parallel
     const otherIps = Array.from(candidateIps).filter(ip => ip !== gatewayIp);
     const otherPromises = otherIps.map(ip => this.probeNestNode(ip, arpMap.get(ip)));
     const otherResults = await Promise.all(otherPromises);
 
     const validMap = new Map();
-    if (rootCandidate) validMap.set(rootCandidate.ip, rootCandidate);
+    if (rootCandidate) {
+      validMap.set(rootCandidate.ip, rootCandidate);
+      this.knownNestIps.add(rootCandidate.ip);
+    }
     for (const r of otherResults) {
-      if (r) validMap.set(r.ip, r);
+      if (r) {
+        validMap.set(r.ip, r);
+        this.knownNestIps.add(r.ip);
+      }
+    }
+
+    // If we only found the root or no satellites yet, perform a fast parallel subnet sweep
+    if (validMap.size <= 1 && net.subnetPrefix) {
+      const sweptIps = await this.sweepSubnet(net.subnetPrefix);
+      const freshArp = await this.getArpTable(net.subnetPrefix);
+      for (const ip of sweptIps) {
+        this.knownNestIps.add(ip);
+        if (!validMap.has(ip)) {
+          const node = await this.probeNestNode(ip, freshArp.get(ip));
+          if (node) validMap.set(node.ip, node);
+        }
+      }
     }
 
     const validNodes = Array.from(validMap.values());
     this.discoveredNodes = validNodes;
+
+    // Refresh ARP mappings for any node that might have been missing ARP
+    const finalArp = await this.getArpTable(net.subnetPrefix);
+    for (const node of validNodes) {
+      if (!node.mac && finalArp.has(node.ip)) {
+        node.mac = finalArp.get(node.ip);
+      }
+    }
 
     // Determine root and leaves
     const rootNode = validNodes.find(n => n.role === 'root') || validNodes.find(n => n.ip === gatewayIp) || {
       ip: gatewayIp,
       model: 'Nest Wifi Pro',
       role: 'root',
-      mac: arpMap.get(gatewayIp)
+      mac: finalArp.get(gatewayIp) || arpMap.get(gatewayIp)
     };
 
     const leafNodes = validNodes.filter(n => n.ip !== rootNode.ip);
 
-    // Determine which node the PC is connected to based on BSSID MAC prefix
+    // Determine which node the PC is connected to based on BSSID MAC matching:
+    // On Google Nest, the Wi-Fi BSSID and Ethernet MAC share the exact same OUI and first 4-5 octets,
+    // differing typically only in the last octet (e.g., fc:91:5d:cd:00:a0 vs fc:91:5d:cd:00:a9).
     const clientBssid = (wifiInfo?.bssid || '').toLowerCase().replace(/-/g, ':');
     let connectedNode = rootNode; // default to root
 
     if (clientBssid) {
-      const bssidPrefix = clientBssid.slice(0, 14); // first 5 octets
-      // Check if root matches
-      if (rootNode.mac && rootNode.mac.startsWith(bssidPrefix)) {
-        connectedNode = rootNode;
-      } else {
-        // Check leaf nodes
-        for (const leaf of leafNodes) {
-          if (leaf.mac && leaf.mac.startsWith(bssidPrefix)) {
-            connectedNode = leaf;
-            break;
-          }
+      const bssidPrefix5 = clientBssid.slice(0, 15); // first 5 octets (e.g. "fc:91:5d:cd:00:")
+      const bssidPrefix4 = clientBssid.slice(0, 12); // first 4 octets (e.g. "fc:91:5d:cd:")
+
+      // 1. Try 5-octet match first (highest accuracy)
+      let match = leafNodes.find(leaf => leaf.mac && leaf.mac.startsWith(bssidPrefix5));
+      if (!match && rootNode.mac && rootNode.mac.startsWith(bssidPrefix5)) {
+        match = rootNode;
+      }
+
+      // 2. Fallback to 4-octet match if last octet range varies by more than 16
+      if (!match) {
+        match = leafNodes.find(leaf => leaf.mac && leaf.mac.startsWith(bssidPrefix4));
+        if (!match && rootNode.mac && rootNode.mac.startsWith(bssidPrefix4)) {
+          match = rootNode;
         }
+      }
+
+      if (match) {
+        connectedNode = match;
       }
     }
 

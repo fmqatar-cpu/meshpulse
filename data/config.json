@@ -1,5 +1,5 @@
 {
-  "selectedProvider": "auto",
+  "selectedProvider": "google_nest",
   "pingIntervalMs": 1000,
   "historyRetention": 60,
   "targets": {
