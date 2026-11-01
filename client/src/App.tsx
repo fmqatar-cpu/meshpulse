@@ -21,6 +21,8 @@ import {
   Info
 } from 'lucide-react';
 
+import pkg from '../../package.json';
+
 interface WifiInfo {
   connected: boolean;
   interfaceName: string;
@@ -491,7 +493,7 @@ export default function App() {
                 MeshPulse
               </span>
               <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                v1.0
+                v{pkg.version}
               </span>
               <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
                 overallStatus === 'HEALTHY'
