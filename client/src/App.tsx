@@ -1044,28 +1044,48 @@ export default function App() {
 
         {/* TAB 1: TOPOLOGY MAP */}
         {activeTab === 'topology' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className={`grid grid-cols-1 ${selectedNode ? 'lg:grid-cols-3' : 'grid-cols-1'} gap-6 transition-all duration-300`}>
             
             {/* Visual Architecture Map Canvas */}
-            <div className="lg:col-span-2 glass-panel p-5 flex flex-col justify-between min-h-[440px] relative">
-              <div className="flex items-center justify-between z-10">
+            <div 
+              onClick={() => setSelectedNode(null)}
+              className={`${selectedNode ? 'lg:col-span-2' : 'col-span-1'} glass-panel p-5 flex flex-col justify-between min-h-[440px] relative transition-all duration-300 cursor-default`}
+            >
+              <div className="flex items-center justify-between z-10 flex-wrap gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2">
                     <Radio className="w-4 h-4 text-cyan-400" />
                     <span>Live Physical Mesh Topology</span>
                   </h3>
-                  <p className="text-xs text-slate-400">Click any node to view hardware specifications, backhaul channel, and uptime.</p>
+                  <p className="text-xs text-slate-400">
+                    {selectedNode 
+                      ? 'Inspecting selected node. Click background to collapse inspector.' 
+                      : 'Click any node to view hardware specifications, backhaul channel, and uptime.'}
+                  </p>
                 </div>
                 <div className="flex items-center gap-3 text-xs font-mono">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Optimal Link
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Degraded
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-rose-400" /> Bottleneck / Loss
-                  </span>
+                  {/* Always-visible System Health Indicator */}
+                  <div className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-slate-900/90 border border-slate-700/80 shadow-sm">
+                    <span className="text-slate-400 text-[11px]">System Health:</span>
+                    <span className={`font-bold font-mono text-xs ${
+                      healthScore >= 90 ? 'text-emerald-400' :
+                      healthScore >= 70 ? 'text-amber-400' : 'text-rose-400'
+                    }`}>
+                      {healthScore}/100
+                    </span>
+                  </div>
+
+                  <div className="hidden sm:flex items-center gap-3 text-[11px]">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Optimal Link
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-400" /> Degraded
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-400" /> Loss
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1075,7 +1095,10 @@ export default function App() {
                   
                   {/* 1. Host PC */}
                   <div
-                    onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'client'))}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedNode(topology.nodes?.find((n: any) => n.type === 'client'));
+                    }}
                     className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[100px] ${
                       selectedNode?.type === 'client'
                         ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
@@ -1115,7 +1138,10 @@ export default function App() {
                     {topology.nodes?.filter((n: any) => n.type === 'satellite').map((sat: any) => (
                       <div
                         key={sat.id}
-                        onClick={() => setSelectedNode(sat)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedNode(sat);
+                        }}
                         className={`cursor-pointer p-2.5 rounded-xl border flex items-center gap-2.5 transition hover:scale-105 w-[165px] ${
                           sat.isCurrentAP
                             ? 'border-emerald-500/70 bg-emerald-950/20 shadow-lg shadow-emerald-500/10'
@@ -1188,7 +1214,10 @@ export default function App() {
                     };
                     return (
                       <div
-                        onClick={() => setSelectedNode(rootNode)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedNode(rootNode);
+                        }}
                         className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[115px] ${
                           selectedNode?.id === rootNode.id
                             ? 'border-purple-400 bg-purple-950/40 ring-2 ring-purple-500/20'
@@ -1240,7 +1269,10 @@ export default function App() {
 
                           {/* Modem Node Card */}
                           <div
-                            onClick={() => setSelectedNode(modemNode)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedNode(modemNode);
+                            }}
                             className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[110px] ${
                               selectedNode?.id === modemNode.id
                                 ? 'border-emerald-400 bg-emerald-950/40 ring-2 ring-emerald-500/20'
@@ -1307,7 +1339,10 @@ export default function App() {
 
                   {/* 5. WAN / Internet */}
                   <div
-                    onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'wan'))}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedNode(topology.nodes?.find((n: any) => n.type === 'wan'));
+                    }}
                     className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[100px] ${
                       selectedNode?.type === 'wan'
                         ? 'border-cyan-400 bg-cyan-950/40 ring-2 ring-cyan-500/20'
@@ -1335,146 +1370,154 @@ export default function App() {
               </div>
             </div>
 
-            {/* Node Inspection Panel */}
-            <div className="glass-panel p-5 flex flex-col justify-between">
-              <div>
-                <h3 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2 mb-3">
-                  <Info className="w-4 h-4 text-indigo-400" />
-                  <span>Node Inspector</span>
-                </h3>
+            {/* Node Inspection Panel - Only rendered when a node is selected */}
+            {selectedNode && (
+              <div 
+                onClick={(e) => e.stopPropagation()}
+                className="glass-panel p-5 flex flex-col justify-between transition-all duration-300 animate-fadeIn"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2">
+                      <Info className="w-4 h-4 text-indigo-400" />
+                      <span>Node Inspector</span>
+                    </h3>
+                    <button
+                      onClick={() => setSelectedNode(null)}
+                      className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-300 hover:text-white border border-slate-700 text-xs font-semibold transition flex items-center gap-1"
+                      title="Collapse Inspector"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
 
-                {(() => {
-                  const node = selectedNode 
-                    ? (topology.nodes?.find((n: any) => n.id === selectedNode.id || n.ip === selectedNode.ip) || selectedNode)
-                    : null;
-                  if (!node) {
+                  {(() => {
+                    const node = selectedNode 
+                      ? (topology.nodes?.find((n: any) => n.id === selectedNode.id || n.ip === selectedNode.ip) || selectedNode)
+                      : null;
+                    if (!node) return null;
+
                     return (
-                      <div className="py-12 text-center text-xs text-slate-500">
-                        Click any node in the topology diagram to inspect its backhaul telemetry, MAC address, and firmware details.
+                      <div className="space-y-3">
+                        <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
+                          <div className="text-xs text-slate-400">Node Label</div>
+                          <div className="text-sm font-bold text-white mt-0.5">{node.name}</div>
+                          <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {node.role}</div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                            <span className="text-slate-500 block text-[10px]">IP ADDRESS</span>
+                            <span className="text-slate-200 font-bold">{node.ip}</span>
+                          </div>
+                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                            <span className="text-slate-500 block text-[10px]">HARDWARE MODEL</span>
+                            <span className="text-slate-200 font-bold">{node.model || 'Nest Wifi Pro'}</span>
+                          </div>
+                          {node.mac && (
+                            <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                              <span className="text-slate-500 block text-[10px]">MAC ADDRESS</span>
+                              <span className="text-slate-200 font-bold">{node.mac}</span>
+                            </div>
+                          )}
+                          {node.uptime && (
+                            <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
+                              <span className="text-slate-500 block text-[10px]">DEVICE UPTIME</span>
+                              <span className="text-emerald-400 font-bold">{formatUptime(node.uptime)}</span>
+                            </div>
+                          )}
+                          {node.softwareVersion && (
+                            <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
+                              <span className="text-slate-500 block text-[10px]">SOFTWARE FIRMWARE</span>
+                              <span className="text-slate-200">{node.softwareVersion}</span>
+                            </div>
+                          )}
+                          {node.backhaulType && (
+                            <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
+                              <span className="text-slate-500 block text-[10px]">ACTIVE BACKHAUL MEDIUM</span>
+                              <span className={`font-bold ${node.isWiredBackhaul ? 'text-emerald-400' : 'text-cyan-400'}`}>
+                                {node.backhaulType}
+                              </span>
+                            </div>
+                          )}
+
+                          {node.type === 'modem' && (
+                            <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
+                              <span className="text-emerald-300 font-bold block">🌐 ISP Optical Network Terminal (ONT) / Modem</span>
+                              <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
+                                Upstream gateway providing WAN connectivity to your primary router. Monitored via ICMP telemetry to verify physical fiber/cable link integrity.
+                              </p>
+                            </div>
+                          )}
+
+                          {node.type === 'satellite' && (
+                            <>
+                              {node.isWiredBackhaul ? (
+                                <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                      <span className="text-emerald-300 font-bold block">⚡ Wired Ethernet Backhaul Active</span>
+                                      <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
+                                        Point is connected via physical Ethernet cable back to root router at full gigabit speed.
+                                      </p>
+                                    </div>
+                                    <button
+                                      onClick={() => handleToggleNodeWired(node.ip, true)}
+                                      className="px-2.5 py-1 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shrink-0"
+                                    >
+                                      Switch to Wi-Fi
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="p-3 rounded-lg bg-slate-900/90 border border-indigo-900/60 col-span-2 text-xs">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div>
+                                      <span className="text-indigo-300 font-bold block">📶 Wi-Fi 6E Wireless Mesh Active</span>
+                                      <p className="text-slate-400 text-[11px] mt-1 leading-relaxed">
+                                        Nest Wifi Pro firmware (3.78+) bridges wired satellite ports into the internal switch without reporting it via legacy local v1 status. If this node is connected via Ethernet cable, click to activate Wired mode:
+                                      </p>
+                                    </div>
+                                    <button
+                                      onClick={() => handleToggleNodeWired(node.ip, false)}
+                                      className="px-3 py-1.5 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white shadow transition flex items-center gap-1.5 shrink-0"
+                                    >
+                                      ⚡ Set as Wired
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
                       </div>
                     );
-                  }
-
-                  return (
-                    <div className="space-y-3">
-                      <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
-                        <div className="text-xs text-slate-400">Node Label</div>
-                        <div className="text-sm font-bold text-white mt-0.5">{node.name}</div>
-                        <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {node.role}</div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                          <span className="text-slate-500 block text-[10px]">IP ADDRESS</span>
-                          <span className="text-slate-200 font-bold">{node.ip}</span>
-                        </div>
-                        <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                          <span className="text-slate-500 block text-[10px]">HARDWARE MODEL</span>
-                          <span className="text-slate-200 font-bold">{node.model || 'Nest Wifi Pro'}</span>
-                        </div>
-                        {node.mac && (
-                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                            <span className="text-slate-500 block text-[10px]">MAC ADDRESS</span>
-                            <span className="text-slate-200 font-bold">{node.mac}</span>
-                          </div>
-                        )}
-                        {node.uptime && (
-                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
-                            <span className="text-slate-500 block text-[10px]">DEVICE UPTIME</span>
-                            <span className="text-emerald-400 font-bold">{formatUptime(node.uptime)}</span>
-                          </div>
-                        )}
-                        {node.softwareVersion && (
-                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                            <span className="text-slate-500 block text-[10px]">SOFTWARE FIRMWARE</span>
-                            <span className="text-slate-200">{node.softwareVersion}</span>
-                          </div>
-                        )}
-                        {node.backhaulType && (
-                          <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800 col-span-2">
-                            <span className="text-slate-500 block text-[10px]">ACTIVE BACKHAUL MEDIUM</span>
-                            <span className={`font-bold ${node.isWiredBackhaul ? 'text-emerald-400' : 'text-cyan-400'}`}>
-                              {node.backhaulType}
-                            </span>
-                          </div>
-                        )}
-
-                        {node.type === 'modem' && (
-                          <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
-                            <span className="text-emerald-300 font-bold block">🌐 ISP Optical Network Terminal (ONT) / Modem</span>
-                            <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
-                              Upstream gateway providing WAN connectivity to your primary router. Monitored via ICMP telemetry to verify physical fiber/cable link integrity.
-                            </p>
-                          </div>
-                        )}
-
-                        {node.type === 'satellite' && (
-                          <>
-                            {node.isWiredBackhaul ? (
-                              <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div>
-                                    <span className="text-emerald-300 font-bold block">⚡ Wired Ethernet Backhaul Active</span>
-                                    <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
-                                      Point is connected via physical Ethernet cable back to root router at full gigabit speed.
-                                    </p>
-                                  </div>
-                                  <button
-                                    onClick={() => handleToggleNodeWired(node.ip, true)}
-                                    className="px-2.5 py-1 text-[11px] rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition shrink-0"
-                                  >
-                                    Switch to Wi-Fi
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="p-3 rounded-lg bg-slate-900/90 border border-indigo-900/60 col-span-2 text-xs">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div>
-                                    <span className="text-indigo-300 font-bold block">📶 Wi-Fi 6E Wireless Mesh Active</span>
-                                    <p className="text-slate-400 text-[11px] mt-1 leading-relaxed">
-                                      Nest Wifi Pro firmware (3.78+) bridges wired satellite ports into the internal switch without reporting it via legacy local v1 status. If this node is connected via Ethernet cable, click to activate Wired mode:
-                                    </p>
-                                  </div>
-                                  <button
-                                    onClick={() => handleToggleNodeWired(node.ip, false)}
-                                    className="px-3 py-1.5 text-xs font-semibold rounded bg-emerald-600 hover:bg-emerald-500 text-white shadow transition flex items-center gap-1.5 shrink-0"
-                                  >
-                                    ⚡ Set as Wired
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Dynamic Composite Health Summary */}
-              <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 mt-4">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400 font-medium">Composite Network Health</span>
-                  <span className={`font-bold font-mono text-sm ${
-                    healthScore >= 90 ? 'text-emerald-400' :
-                    healthScore >= 70 ? 'text-amber-400' : 'text-rose-400'
-                  }`}>
-                    {healthScore} / 100
-                  </span>
+                  })()}
                 </div>
-                <div className="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-500 rounded-full bg-gradient-to-r ${
-                      healthScore >= 90 ? 'from-emerald-500 to-cyan-400' :
-                      healthScore >= 70 ? 'from-amber-500 to-orange-400' : 'from-rose-500 to-red-600'
-                    }`}
-                    style={{ width: `${healthScore}%` }}
-                  />
+
+                {/* Dynamic Composite Health Summary */}
+                <div className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 mt-4">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400 font-medium">Composite Network Health</span>
+                    <span className={`font-bold font-mono text-sm ${
+                      healthScore >= 90 ? 'text-emerald-400' :
+                      healthScore >= 70 ? 'text-amber-400' : 'text-rose-400'
+                    }`}>
+                      {healthScore} / 100
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-800 h-2 rounded-full mt-2 overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 rounded-full bg-gradient-to-r ${
+                        healthScore >= 90 ? 'from-emerald-500 to-cyan-400' :
+                        healthScore >= 70 ? 'from-amber-500 to-orange-400' : 'from-rose-500 to-red-600'
+                      }`}
+                      style={{ width: `${healthScore}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
           </div>
         )}
