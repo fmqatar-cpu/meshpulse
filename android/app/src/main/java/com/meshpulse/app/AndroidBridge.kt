@@ -256,6 +256,7 @@ class AndroidBridge(private val context: Context) {
     fun discoverMeshNodes(gatewayIp: String, subnetPrefix: String): String {
         val nodesArray = JSONArray()
         try {
+            val arpMap = getArpTable()
             val prefix = if (subnetPrefix.isNotEmpty() && subnetPrefix.endsWith(".")) {
                 subnetPrefix
             } else if (gatewayIp.isNotEmpty()) {
@@ -288,6 +289,7 @@ class AndroidBridge(private val context: Context) {
                                 val sys = rootJson.getJSONObject("system")
                                 val nodeObj = JSONObject()
                                 nodeObj.put("ip", targetIp)
+                                nodeObj.put("mac", arpMap[targetIp] ?: "")
                                 nodeObj.put("model", sys.optString("modelId", "Nest Wifi Pro"))
                                 nodeObj.put("role", sys.optString("groupRole", if (targetIp == gatewayIp) "root" else "leaf"))
                                 nodeObj.put("hardwareId", sys.optString("hardwareId", ""))
@@ -334,6 +336,36 @@ class AndroidBridge(private val context: Context) {
             // General discovery error
         }
         return nodesArray.toString()
+    }
+
+    private fun getArpTable(): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        try {
+            val process = Runtime.getRuntime().exec("ip neigh")
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val parts = line!!.trim().split("\\s+".toRegex())
+                if (parts.size >= 5 && parts[0].matches("[0-9.]+".toRegex()) && parts[4].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
+                    map[parts[0]] = parts[4].lowercase()
+                }
+            }
+            reader.close()
+            process.waitFor()
+        } catch (e: Exception) {
+            try {
+                val file = java.io.File("/proc/net/arp")
+                if (file.exists()) {
+                    file.forEachLine { l ->
+                        val p = l.trim().split("\\s+".toRegex())
+                        if (p.size >= 4 && p[0].matches("[0-9.]+".toRegex()) && p[3].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
+                            map[p[0]] = p[3].lowercase()
+                        }
+                    }
+                }
+            } catch (ex: Exception) {}
+        }
+        return map
     }
 
     @JavascriptInterface

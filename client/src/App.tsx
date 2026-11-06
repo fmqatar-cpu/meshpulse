@@ -632,16 +632,36 @@ export default function App() {
 
             const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
 
-            // Determine which node the phone is connected to using BSSID MAC prefix matching
-            const clientBssid = (wifiParsed.bssid || '').toLowerCase();
+            // Determine which node the phone is connected to using robust BSSID MAC matching
+            const clientBssid = (wifiParsed.bssid || '').toLowerCase().replace(/[:-]/g, '');
             let connectedNode = rootCandidate;
 
-            if (clientBssid) {
-              const bssidClean = clientBssid.replace(/[:-]/g, '');
-              const match = leafCandidates.find(leaf => {
-                const macClean = (leaf.hardwareId || leaf.mac || '').toLowerCase().replace(/[:-]/g, '');
-                return macClean.length >= 8 && bssidClean.startsWith(macClean.slice(0, 8));
-              });
+            if (clientBssid && clientBssid.length >= 10) {
+              const rootMacClean = (rootCandidate.mac || '').toLowerCase().replace(/[:-]/g, '');
+
+              // 1. Check 5-octet match (10 hex characters)
+              let match = null;
+              if (rootMacClean.length >= 10 && clientBssid.startsWith(rootMacClean.slice(0, 10))) {
+                match = rootCandidate;
+              }
+              if (!match) {
+                match = leafCandidates.find(leaf => {
+                  const leafMacClean = (leaf.mac || leaf.hardwareId || '').toLowerCase().replace(/[:-]/g, '');
+                  return leafMacClean.length >= 10 && clientBssid.startsWith(leafMacClean.slice(0, 10));
+                });
+              }
+
+              // 2. Check 4.5-octet match (9 hex characters)
+              if (!match && rootMacClean.length >= 9 && clientBssid.startsWith(rootMacClean.slice(0, 9))) {
+                match = rootCandidate;
+              }
+              if (!match) {
+                match = leafCandidates.find(leaf => {
+                  const leafMacClean = (leaf.mac || leaf.hardwareId || '').toLowerCase().replace(/[:-]/g, '');
+                  return leafMacClean.length >= 9 && clientBssid.startsWith(leafMacClean.slice(0, 9));
+                });
+              }
+
               if (match) {
                 connectedNode = match;
               }
@@ -1417,125 +1437,195 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Animated Arrow / Link 1 */}
-                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[64px]">
-                    <span className="text-slate-400 text-[9px]">PC ➔ AP</span>
-                    <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
-                      (links['link_client_ap']?.avg || 0) > 40
-                        ? 'bg-amber-950/60 text-amber-400 border-amber-600/40'
-                        : 'bg-emerald-950/60 text-emerald-400 border-emerald-600/40'
-                    }`}>
-                      {links['link_client_ap']?.current !== null ? `${links['link_client_ap']?.current} ms` : '—'}
-                    </div>
-                    <div className="w-12 h-0.5 bg-gradient-to-r from-cyan-500 via-indigo-500 to-emerald-500 relative">
-                      <div className="w-1.5 h-1.5 rounded-full bg-white absolute -top-0.5 animate-ping" />
-                    </div>
-                    <span className="text-[9px] text-slate-500">
-                      {links['link_client_ap']?.lossPct || 0}% loss
-                    </span>
-                  </div>
-
-                  {/* 2. Satellites / Access Points Stack */}
-                  <div className="flex flex-col gap-2 shrink-0">
-                    {topology.nodes?.filter((n: any) => n.type === 'satellite').map((sat: any) => (
-                      <div
-                        key={sat.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedNode(sat);
-                        }}
-                        className={`cursor-pointer p-2.5 rounded-xl border flex items-center gap-2.5 transition hover:scale-105 w-[165px] ${
-                          sat.isCurrentAP
-                            ? 'border-emerald-500/70 bg-emerald-950/20 shadow-lg shadow-emerald-500/10'
-                            : selectedNode?.id === sat.id
-                            ? 'border-indigo-400 bg-indigo-950/40'
-                            : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-indigo-400 shrink-0">
-                          <Router className="w-4 h-4" />
-                        </div>
-                        <div className="overflow-hidden">
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs font-bold text-white truncate">{sat.name}</span>
-                          </div>
-                          <div className="text-[10px] text-slate-400 font-mono truncate">{sat.ip}</div>
-                          <div className={`text-[9px] font-mono truncate mt-0.5 ${
-                            sat.isWiredBackhaul ? 'text-emerald-400 font-bold' : 'text-indigo-400'
-                          }`}>
-                            {sat.isWiredBackhaul ? '⚡ Wired Ethernet (1G)' : (sat.backhaulType || 'Mesh Backhaul')}
-                          </div>
-                          {sat.isCurrentAP && (
-                            <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
-                              Connected AP
-                            </span>
-                          )}
-                          {sat.hasLocalLanDevice && (
-                            <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 font-semibold inline-block mt-0.5 ml-1">
-                              LAN Active
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Animated Arrow / Link 2 (Backhaul) */}
+                  {/* Dynamic Mesh Architecture Canvas (Adapts to Active Connected AP) */}
                   {(() => {
+                    const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
+                      id: 'node_gateway',
+                      name: 'Nest Wifi Pro (Main Router)',
+                      type: 'root',
+                      ip: wifi.gatewayIp || '192.168.86.1',
+                      isCurrentAP: false
+                    };
+
                     const satellites = topology.nodes?.filter((n: any) => n.type === 'satellite') || [];
+
+                    // Accurately determine if client is connected to Root or Satellite
+                    const isClientOnRoot = Boolean(
+                      rootNode?.isCurrentAP ||
+                      (links['link_client_ap'] && links['link_client_ap'].host === rootNode.ip) ||
+                      (!satellites.some((s: any) => s.isCurrentAP))
+                    );
+
                     const activeSat = satellites.find((s: any) => s.isCurrentAP) || satellites[0];
                     const isWired = activeSat?.isWiredBackhaul || satellites.some((s: any) => s.isWiredBackhaul);
 
-                    return (
-                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
-                        <span className="text-slate-400 text-[9px]">Backhaul</span>
-                        <div className={`px-1.5 py-0.5 rounded font-bold border text-center transition-all ${
-                          isWired
-                            ? 'bg-emerald-950/70 text-emerald-300 border-emerald-500/50 shadow-sm shadow-emerald-500/20'
-                            : 'bg-indigo-950/60 text-indigo-300 border-indigo-600/40'
-                        }`}>
-                          {isWired ? '⚡ Wired' : '6 GHz'}
-                        </div>
-                        <div className={`w-12 h-0.5 relative ${
-                          isWired ? 'bg-gradient-to-r from-emerald-500 to-purple-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'
-                        }`}>
-                          <div className={`w-1.5 h-1.5 rounded-full absolute -top-0.5 ${isWired ? 'bg-emerald-300' : 'bg-indigo-300'}`} />
-                        </div>
-                        <span className="text-[8px] text-slate-500">
-                          {isWired ? '1 Gbps RJ45' : `Ch ${topology.systemInfo?.meshChannel || '197'}`}
-                        </span>
-                      </div>
-                    );
-                  })()}
-
-                  {/* 3. Main Router (Root Gateway) */}
-                  {(() => {
-                    const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
-                      name: 'Main Router',
-                      ip: wifi.gatewayIp || '192.168.1.1'
-                    };
-                    return (
+                    // Reusable Main Router Card JSX
+                    const renderMainRouter = (isFirstHop: boolean) => (
                       <div
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedNode(rootNode);
                         }}
-                        className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[115px] ${
-                          selectedNode?.id === rootNode.id
+                        className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[125px] ${
+                          isFirstHop
+                            ? 'border-emerald-500/80 bg-emerald-950/30 ring-2 ring-emerald-500/30 shadow-lg shadow-emerald-500/10'
+                            : selectedNode?.id === rootNode.id
                             ? 'border-purple-400 bg-purple-950/40 ring-2 ring-purple-500/20'
                             : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
                         }`}
                       >
-                        <div className="w-10 h-10 rounded-lg bg-purple-950/60 border border-purple-500/30 flex items-center justify-center text-purple-400 shadow-md">
+                        <div className={`w-10 h-10 rounded-lg flex items-center justify-center shadow-md ${
+                          isFirstHop ? 'bg-emerald-950/60 border border-emerald-500/40 text-emerald-400' : 'bg-purple-950/60 border border-purple-500/30 text-purple-400'
+                        }`}>
                           <Router className="w-5 h-5" />
                         </div>
                         <div className="text-center w-full">
                           <div className="text-xs font-bold text-white truncate">{rootNode.name}</div>
                           <div className="text-[10px] text-slate-400 font-mono mt-0.5">{rootNode.ip}</div>
                           <div className="text-[9px] text-purple-400 font-mono">Root Gateway</div>
+                          {isFirstHop && (
+                            <span className="text-[8px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
+                              Connected AP
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
+
+                    // Reusable Satellites Stack JSX
+                    const renderSatellitesStack = (isFirstHop: boolean) => (
+                      <div className="flex flex-col gap-2 shrink-0">
+                        {satellites.map((sat: any) => (
+                          <div
+                            key={sat.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedNode(sat);
+                            }}
+                            className={`cursor-pointer p-2.5 rounded-xl border flex items-center gap-2.5 transition hover:scale-105 w-[165px] ${
+                              isFirstHop && sat.isCurrentAP
+                                ? 'border-emerald-500/70 bg-emerald-950/20 shadow-lg shadow-emerald-500/10 ring-2 ring-emerald-500/30'
+                                : selectedNode?.id === sat.id
+                                ? 'border-indigo-400 bg-indigo-950/40'
+                                : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="w-8 h-8 rounded-lg bg-slate-800 flex items-center justify-center text-indigo-400 shrink-0">
+                              <Router className="w-4 h-4" />
+                            </div>
+                            <div className="overflow-hidden">
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs font-bold text-white truncate">{sat.name}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono truncate">{sat.ip}</div>
+                              <div className={`text-[9px] font-mono truncate mt-0.5 ${
+                                sat.isWiredBackhaul ? 'text-emerald-400 font-bold' : 'text-indigo-400'
+                              }`}>
+                                {sat.isWiredBackhaul ? '⚡ Wired Ethernet (1G)' : (sat.backhaulType || 'Mesh Backhaul')}
+                              </div>
+                              {isFirstHop && sat.isCurrentAP ? (
+                                <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
+                                  Connected AP
+                                </span>
+                              ) : (
+                                <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 font-semibold inline-block mt-0.5">
+                                  Mesh Extension
+                                </span>
+                              )}
+                              {sat.hasLocalLanDevice && (
+                                <span className="text-[8px] font-mono px-1 py-0.2 rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 font-semibold inline-block mt-0.5 ml-1">
+                                  LAN Active
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+
+                    // Reusable Link Arrow JSX
+                    const renderArrow = (label: string, sublabel: string, latencyMs: number | string | null, lossPct: number = 0, isEmerald: boolean = true) => (
+                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                        <span className="text-slate-400 text-[9px]">{label}</span>
+                        <div className={`px-1.5 py-0.5 rounded font-bold border text-center transition-all ${
+                          isEmerald
+                            ? 'bg-emerald-950/60 text-emerald-400 border-emerald-600/40'
+                            : 'bg-indigo-950/60 text-indigo-300 border-indigo-600/40'
+                        }`}>
+                          {latencyMs !== null ? `${latencyMs} ms` : sublabel}
+                        </div>
+                        <div className={`w-12 h-0.5 relative ${
+                          isEmerald ? 'bg-gradient-to-r from-cyan-500 via-indigo-500 to-emerald-500' : 'bg-gradient-to-r from-indigo-500 to-purple-500'
+                        }`}>
+                          <div className={`w-1.5 h-1.5 rounded-full absolute -top-0.5 ${isEmerald ? 'bg-emerald-300 animate-ping' : 'bg-indigo-300'}`} />
+                        </div>
+                        <span className="text-[8px] text-slate-500">
+                          {lossPct > 0 ? `${lossPct}% loss` : sublabel}
+                        </span>
+                      </div>
+                    );
+
+                    // If client is on Main Router: Phone -> Main Router (Connected AP) -> Mesh Backhaul -> Satellites
+                    // If client is on Satellite:   Phone -> Satellite (Connected AP) -> Mesh Backhaul -> Main Router
+                    if (isClientOnRoot) {
+                      return (
+                        <React.Fragment>
+                          {/* Hop 1: Direct Wi-Fi to Main Router */}
+                          {renderArrow(
+                            'Client ➔ Router',
+                            'Wi-Fi Hop',
+                            links['link_client_ap']?.current !== null ? links['link_client_ap']?.current : '—',
+                            links['link_client_ap']?.lossPct || 0,
+                            true
+                          )}
+
+                          {/* Node: Main Router (First Hop AP) */}
+                          {renderMainRouter(true)}
+
+                          {/* Hop 2: Mesh Backhaul to Satellites */}
+                          {satellites.length > 0 && (
+                            <React.Fragment>
+                              {renderArrow(
+                                'Mesh Backhaul',
+                                isWired ? '⚡ 1G RJ45' : '6 GHz',
+                                null,
+                                0,
+                                isWired
+                              )}
+                              {renderSatellitesStack(false)}
+                            </React.Fragment>
+                          )}
+                        </React.Fragment>
+                      );
+                    } else {
+                      return (
+                        <React.Fragment>
+                          {/* Hop 1: Direct Wi-Fi to Connected Satellite */}
+                          {renderArrow(
+                            'Client ➔ AP',
+                            'Wi-Fi Hop',
+                            links['link_client_ap']?.current !== null ? links['link_client_ap']?.current : '—',
+                            links['link_client_ap']?.lossPct || 0,
+                            true
+                          )}
+
+                          {/* Node: Satellites Stack (First Hop AP) */}
+                          {renderSatellitesStack(true)}
+
+                          {/* Hop 2: Mesh Backhaul to Main Router */}
+                          {renderArrow(
+                            'Mesh Backhaul',
+                            isWired ? '⚡ 1G RJ45' : '6 GHz',
+                            null,
+                            0,
+                            isWired
+                          )}
+
+                          {/* Node: Main Router Gateway */}
+                          {renderMainRouter(false)}
+                        </React.Fragment>
+                      );
+                    }
                   })()}
 
                   {/* 4. Modem / ONT Hop (if present) or Direct Link */}
