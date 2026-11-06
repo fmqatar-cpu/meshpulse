@@ -7,13 +7,13 @@
     "fallbackInternetHost": "8.8.8.8"
   },
   "thresholds": {
-    "latencyWarningMs": 40,
-    "latencyCriticalMs": 100,
-    "lossWarningPct": 5,
-    "lossCriticalPct": 20,
-    "rssiWarningDbm": -72,
-    "rssiCriticalDbm": -82,
-    "jitterWarningMs": 25
+    "latencyWarningMs": 60,
+    "latencyCriticalMs": 150,
+    "lossWarningPct": 15,
+    "lossCriticalPct": 35,
+    "rssiWarningDbm": -75,
+    "rssiCriticalDbm": -85,
+    "jitterWarningMs": 30
   },
   "customNodes": [],
   "nodeOverrides": {}

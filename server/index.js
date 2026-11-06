@@ -7,6 +7,7 @@ const configManager = require('./services/ConfigManager');
 const wifiScanner = require('./services/WifiScanner');
 const networkProber = require('./services/NetworkProber');
 const diagnosisEngine = require('./services/DiagnosisEngine');
+const deviceScanner = require('./services/DeviceScanner');
 const providerFactory = require('./providers/ProviderFactory');
 
 const app = express();
@@ -137,6 +138,21 @@ async function startEngine() {
 // REST API
 app.get('/api/status', (req, res) => {
   res.json(getFullSnapshot());
+});
+
+app.get('/api/devices', async (req, res) => {
+  try {
+    const localIp = currentWifiInfo?.localIp || '192.168.86.56';
+    const gatewayIp = currentWifiInfo?.gatewayIp || '192.168.86.1';
+    const devices = await deviceScanner.scan(localIp, gatewayIp);
+    res.json({
+      timestamp: Date.now(),
+      count: devices.length,
+      devices
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get('/api/providers', (req, res) => {

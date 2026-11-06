@@ -336,6 +336,31 @@ class AndroidBridge(private val context: Context) {
         return nodesArray.toString()
     }
 
+    @JavascriptInterface
+    fun getConnectedDevices(): String {
+        val array = JSONArray()
+        try {
+            val process = Runtime.getRuntime().exec("ip neigh")
+            val reader = BufferedReader(InputStreamReader(process.inputStream))
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val parts = line!!.trim().split("\\s+".toRegex())
+                if (parts.size >= 5 && parts[0].matches("[0-9.]+".toRegex()) && parts[4].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
+                    val obj = JSONObject()
+                    obj.put("ip", parts[0])
+                    obj.put("mac", parts[4].lowercase())
+                    obj.put("status", if (parts.size > 5) parts[5] else "REACHABLE")
+                    array.put(obj)
+                }
+            }
+            reader.close()
+            process.waitFor()
+        } catch (e: Exception) {
+            // fallback
+        }
+        return array.toString()
+    }
+
     private fun formatIp(ip: Int): String {
         return String.format(
             "%d.%d.%d.%d",

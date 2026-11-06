@@ -18,7 +18,11 @@ import {
   Cpu,
   Sliders,
   ExternalLink,
-  Info
+  Info,
+  Server,
+  Smartphone,
+  Search,
+  Users
 } from 'lucide-react';
 
 import pkg from '../../package.json';
@@ -43,7 +47,7 @@ interface WifiInfo {
 interface MeshNode {
   id: string;
   name: string;
-  type: 'client' | 'root' | 'satellite' | 'wan';
+  type: 'client' | 'root' | 'satellite' | 'wan' | 'modem';
   role: string;
   ip: string;
   mac?: string;
@@ -58,6 +62,8 @@ interface MeshNode {
   signal?: number;
   rssi?: number;
   band?: string;
+  ethernetLinked?: boolean;
+  localWanIp?: string;
 }
 
 interface MeshLink {
@@ -103,7 +109,12 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isRescanning, setIsRescanning] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
-  const [activeTab, setActiveTab] = useState<'topology' | 'links' | 'incidents'>('topology');
+  const [activeTab, setActiveTab] = useState<'topology' | 'links' | 'devices' | 'incidents'>('topology');
+
+  // Connected Devices state
+  const [devicesList, setDevicesList] = useState<any[]>([]);
+  const [deviceSearch, setDeviceSearch] = useState('');
+  const [isFetchingDevices, setIsFetchingDevices] = useState(false);
 
   // Settings form state
   const [settingsProvider, setSettingsProvider] = useState('google_nest');
@@ -130,6 +141,67 @@ export default function App() {
       }
     } catch (e) {
       console.error('Fetch status error:', e);
+    }
+  };
+
+  // Fetch connected devices from backend or Android bridge
+  const fetchDevices = async () => {
+    setIsFetchingDevices(true);
+    try {
+      const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+      if (isAndroid) {
+        const bridge = (window as any).AndroidBridge;
+        if (bridge.getConnectedDevices) {
+          const raw = bridge.getConnectedDevices();
+          const parsed = JSON.parse(raw || '[]');
+          const OUI_MAP: Record<string, { vendor: string; type: string }> = {
+            'fc:91:5d': { vendor: 'Google', type: 'Nest Wifi Pro Mesh' },
+            '58:70:c6': { vendor: 'Google', type: 'Nest / Home Device' },
+            'bc:35:1e': { vendor: 'Google', type: 'Nest Device' },
+            '38:2c:e5': { vendor: 'Google', type: 'Nest Device' },
+            'f8:17:2d': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
+            '98:ed:5c': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
+            '84:7a:b6': { vendor: 'Apple', type: 'Apple Device' },
+            'b4:b8:53': { vendor: 'Apple', type: 'Apple Device' },
+            '74:f9:ca': { vendor: 'Apple', type: 'Apple Device' },
+            'c0:f8:53': { vendor: 'Apple', type: 'Apple Device' },
+            '90:ca:fa': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+            '54:60:09': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+            '20:1f:3b': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+            '20:f1:b2': { vendor: 'Sony', type: 'PlayStation / Bravia' },
+            '38:1f:8d': { vendor: 'Sony', type: 'PlayStation 5 / Audio' },
+            '1c:53:f9': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' },
+            'd8:1f:12': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' }
+          };
+          const devList = parsed.map((d: any) => {
+            const oui = d.mac.slice(0, 8);
+            const firstByte = parseInt(d.mac.slice(0, 2), 16) || 0;
+            const isRandom = (firstByte & 0x02) !== 0;
+            let vendor = 'Generic Device';
+            let type = 'Connected Client';
+            if (OUI_MAP[oui]) {
+              vendor = OUI_MAP[oui].vendor;
+              type = OUI_MAP[oui].type;
+            } else if (isRandom) {
+              vendor = 'Private Wi-Fi Client';
+              type = 'Smartphone / Tablet (Private MAC)';
+            }
+            return { ...d, vendor, type, isRandomized: isRandom };
+          });
+          setDevicesList(devList);
+        }
+        return;
+      }
+
+      const res = await fetch('/api/devices');
+      if (res.ok) {
+        const data = await res.json();
+        setDevicesList(data.devices || []);
+      }
+    } catch (e) {
+      console.error('Fetch devices error:', e);
+    } finally {
+      setIsFetchingDevices(false);
     }
   };
 
@@ -171,6 +243,7 @@ export default function App() {
 
       const androidHistory: Record<string, { t: number; ms: number | null }[]> = {
         link_client_ap: [],
+        link_router_modem: [],
         link_gateway_wan: []
       };
 
@@ -220,13 +293,23 @@ export default function App() {
           } catch (e) {}
 
           const apPingRaw = JSON.parse(bridge.ping(gatewayIp, 1));
+          const modemIp = '192.168.100.1';
+          let modemPingRaw = { success: false, latency: 0 };
+          try {
+            modemPingRaw = JSON.parse(bridge.ping(modemIp, 1) || '{"success":false,"latency":0}');
+          } catch (e) {}
           const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
 
           const apMs = apPingRaw.success ? Math.round(apPingRaw.latency) : null;
+          const modemMs = modemPingRaw.success ? Math.round(modemPingRaw.latency) : null;
           const wanMs = wanPingRaw.success ? Math.round(wanPingRaw.latency) : null;
 
           androidHistory.link_client_ap.push({ t: now, ms: apMs });
           if (androidHistory.link_client_ap.length > 25) androidHistory.link_client_ap.shift();
+
+          if (!androidHistory.link_router_modem) androidHistory.link_router_modem = [];
+          androidHistory.link_router_modem.push({ t: now, ms: modemMs });
+          if (androidHistory.link_router_modem.length > 25) androidHistory.link_router_modem.shift();
 
           androidHistory.link_gateway_wan.push({ t: now, ms: wanMs });
           if (androidHistory.link_gateway_wan.length > 25) androidHistory.link_gateway_wan.shift();
@@ -252,6 +335,7 @@ export default function App() {
 
           const linkStats: Record<string, any> = {
             link_client_ap: calcStats('link_client_ap', gatewayIp, androidHistory.link_client_ap),
+            link_router_modem: calcStats('link_router_modem', modemIp, androidHistory.link_router_modem),
             link_gateway_wan: calcStats('link_gateway_wan', '1.1.1.1', androidHistory.link_gateway_wan)
           };
 
@@ -372,14 +456,24 @@ export default function App() {
               media: 'Wi-Fi'
             });
 
-            // Connect root to internet
+            // Connect root to modem
+            linksArr.push({
+              id: 'link_router_modem',
+              from: rootNodeId,
+              to: 'node_modem',
+              name: 'Router Uplink',
+              type: 'wan_link',
+              media: 'Gigabit Ethernet'
+            });
+
+            // Connect modem to internet
             linksArr.push({
               id: 'link_gateway_wan',
-              from: rootNodeId,
+              from: 'node_modem',
               to: 'node_internet',
-              name: 'WAN Uplink',
+              name: 'WAN Broadband',
               type: 'wan_link',
-              media: 'Broadband'
+              media: 'Broadband Fiber'
             });
 
           } else {
@@ -451,16 +545,35 @@ export default function App() {
             }
 
             linksArr.push({
-              id: 'link_gateway_wan',
+              id: 'link_router_modem',
               from: gatewayNodeId,
-              to: 'node_internet',
-              name: 'WAN Uplink',
+              to: 'node_modem',
+              name: 'Router Uplink',
               type: 'wan_link',
-              media: 'Broadband'
+              media: 'Gigabit Ethernet'
+            });
+
+            linksArr.push({
+              id: 'link_gateway_wan',
+              from: 'node_modem',
+              to: 'node_internet',
+              name: 'WAN Broadband',
+              type: 'wan_link',
+              media: 'Broadband Fiber'
             });
           }
 
-          // 3. Internet Gateway Node
+          // 3. ISP Modem / ONT Node
+          nodes.push({
+            id: 'node_modem',
+            name: `ISP Modem / ONT (${modemIp})`,
+            type: 'modem',
+            role: 'modem',
+            ip: modemIp,
+            status: modemPingRaw.success ? 'online' : 'offline'
+          });
+
+          // 4. Internet Gateway Node
           nodes.push({
             id: 'node_internet',
             name: 'Internet Gateway',
@@ -471,11 +584,55 @@ export default function App() {
           });
 
           let healthScore = 100;
-          if (linkStats.link_gateway_wan.lossPct > 0) healthScore -= linkStats.link_gateway_wan.lossPct * 2;
-          if (linkStats.link_client_ap.lossPct > 0) healthScore -= linkStats.link_client_ap.lossPct * 3;
-          healthScore = Math.max(0, Math.min(100, healthScore));
+          const wanLoss = linkStats.link_gateway_wan?.lossPct || 0;
+          const wanSamples = linkStats.link_gateway_wan?.samplesCount || 0;
+          const apLoss = linkStats.link_client_ap?.lossPct || 0;
+          const apSamples = linkStats.link_client_ap?.samplesCount || 0;
+          const modemLoss = linkStats.link_router_modem?.lossPct || 0;
+          const modemSamples = linkStats.link_router_modem?.samplesCount || 0;
+
+          // Warm-up guard: Only penalize if sample count >= 8 to prevent startup false alarms
+          if (wanSamples >= 8 && wanLoss > 10) {
+            healthScore -= (wanLoss - 10) * 1.5;
+          }
+          if (apSamples >= 8 && apLoss > 10) {
+            healthScore -= (apLoss - 10) * 2.0;
+          }
+          if (modemSamples >= 8 && modemLoss > 10) {
+            healthScore -= (modemLoss - 10) * 1.5;
+          }
+          healthScore = Math.max(0, Math.min(100, Math.round(healthScore)));
 
           const overallStatus = healthScore >= 90 ? 'HEALTHY' : healthScore >= 70 ? 'DEGRADED' : 'CRITICAL';
+
+          const issues: any[] = [];
+          if (wanSamples >= 8 && wanLoss >= 15) {
+            issues.push({
+              id: 'WAN_LOSS',
+              severity: wanLoss >= 35 ? 'CRITICAL' : 'WARNING',
+              title: 'WAN Internet Packet Loss',
+              description: `Experiencing ${wanLoss}% sustained packet loss to external internet (1.1.1.1).`,
+              recommendation: 'Check external ISP connection or contact service provider.'
+            });
+          }
+          if (modemSamples >= 8 && modemLoss >= 15) {
+            issues.push({
+              id: 'MODEM_LOSS',
+              severity: modemLoss >= 35 ? 'CRITICAL' : 'WARNING',
+              title: 'Router to Modem Link Degradation',
+              description: `Experiencing ${modemLoss}% packet loss between primary router and modem (${modemIp}).`,
+              recommendation: 'Inspect Ethernet cable connecting router WAN port to modem/ONT.'
+            });
+          }
+          if (apSamples >= 8 && apLoss >= 15) {
+            issues.push({
+              id: 'CLIENT_AP_LOSS',
+              severity: apLoss >= 35 ? 'CRITICAL' : 'WARNING',
+              title: 'Local Wi-Fi Signal Loss',
+              description: `Experiencing ${apLoss}% packet loss to active Access Point (${gatewayIp}).`,
+              recommendation: 'Move closer to the nearest mesh point or check for local 2.4/5GHz interference.'
+            });
+          }
 
           setSnapshot({
             wifi: wifiParsed,
@@ -484,13 +641,7 @@ export default function App() {
             diagnosis: {
               overallStatus,
               healthScore,
-              issues: linkStats.link_gateway_wan.lossPct > 5 ? [{
-                id: 'WAN_LOSS',
-                severity: 'WARNING',
-                title: 'WAN Internet Packet Loss',
-                description: `Experiencing ${linkStats.link_gateway_wan.lossPct}% packet loss to external internet.`,
-                recommendation: 'Check external ISP connection.'
-              }] : [],
+              issues,
               incidents: []
             }
           });
@@ -873,6 +1024,17 @@ export default function App() {
               <Clock className="w-3.5 h-3.5" />
               <span>Incident History ({diagnosis.incidents?.length || 0})</span>
             </button>
+            <button
+              onClick={() => { setActiveTab('devices'); fetchDevices(); }}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition ${
+                activeTab === 'devices'
+                  ? 'bg-slate-800 text-cyan-400 border border-slate-700'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Connected Devices {devicesList.length > 0 ? `(${devicesList.length})` : ''}</span>
+            </button>
           </div>
 
           <div className="text-xs text-slate-500 font-mono">
@@ -1045,27 +1207,105 @@ export default function App() {
                     );
                   })()}
 
-                  {/* Animated Arrow / Link 3 (WAN) */}
-                  <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
-                    <span className="text-slate-400 text-[9px]">WAN Uplink</span>
-                    <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
-                      (links['link_gateway_wan']?.lossPct || 0) > 5
-                        ? 'bg-rose-950/60 text-rose-400 border-rose-600/40 animate-pulse'
-                        : 'bg-cyan-950/60 text-cyan-300 border-cyan-600/40'
-                    }`}>
-                      {links['link_gateway_wan']?.current !== null ? `${links['link_gateway_wan']?.current} ms` : '—'}
-                    </div>
-                    <div className={`w-12 h-0.5 relative ${
-                      (links['link_gateway_wan']?.lossPct || 0) > 5 ? 'bg-rose-500' : 'bg-gradient-to-r from-purple-500 to-cyan-500'
-                    }`} />
-                    <span className={`text-[9px] font-bold ${
-                      (links['link_gateway_wan']?.lossPct || 0) > 5 ? 'text-rose-400' : 'text-slate-500'
-                    }`}>
-                      {links['link_gateway_wan']?.lossPct || 0}% loss
-                    </span>
-                  </div>
+                  {/* 4. Modem / ONT Hop (if present) or Direct Link */}
+                  {(() => {
+                    const modemNode = topology.nodes?.find((n: any) => n.type === 'modem');
+                    const routerModemLink = links['link_router_modem'];
+                    const modemWanLink = links['link_gateway_wan'];
 
-                  {/* 4. WAN / Internet */}
+                    if (modemNode) {
+                      return (
+                        <>
+                          {/* Router to Modem Link */}
+                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                            <span className="text-slate-400 text-[9px]">Router ➔ Modem</span>
+                            <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
+                              (routerModemLink?.lossPct || 0) > 15
+                                ? 'bg-rose-950/60 text-rose-400 border-rose-600/40 animate-pulse'
+                                : (routerModemLink?.avg || 0) > 30
+                                ? 'bg-amber-950/60 text-amber-400 border-amber-600/40'
+                                : 'bg-emerald-950/60 text-emerald-300 border-emerald-600/40'
+                            }`}>
+                              {routerModemLink?.current !== null ? `${routerModemLink?.current} ms` : '—'}
+                            </div>
+                            <div className="w-12 h-0.5 relative bg-gradient-to-r from-purple-500 to-emerald-500">
+                              <div className="w-1.5 h-1.5 rounded-full bg-white absolute -top-0.5 animate-ping" />
+                            </div>
+                            <span className={`text-[8px] font-bold ${
+                              (routerModemLink?.lossPct || 0) > 15 ? 'text-rose-400' : 'text-slate-500'
+                            }`}>
+                              {routerModemLink?.lossPct || 0}% loss
+                            </span>
+                          </div>
+
+                          {/* Modem Node Card */}
+                          <div
+                            onClick={() => setSelectedNode(modemNode)}
+                            className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[110px] ${
+                              selectedNode?.id === modemNode.id
+                                ? 'border-emerald-400 bg-emerald-950/40 ring-2 ring-emerald-500/20'
+                                : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-lg bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shadow-md">
+                              <Server className="w-5 h-5" />
+                            </div>
+                            <div className="text-center w-full">
+                              <div className="text-xs font-bold text-white truncate">ISP Modem / ONT</div>
+                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">{modemNode.ip}</div>
+                              <div className="text-[9px] text-emerald-400 font-mono">Fiber Bridge</div>
+                            </div>
+                          </div>
+
+                          {/* Modem to Internet WAN Link */}
+                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                            <span className="text-slate-400 text-[9px]">Modem ➔ WAN</span>
+                            <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
+                              (modemWanLink?.lossPct || 0) > 15
+                                ? 'bg-rose-950/60 text-rose-400 border-rose-600/40 animate-pulse'
+                                : (modemWanLink?.avg || 0) > 60
+                                ? 'bg-amber-950/60 text-amber-400 border-amber-600/40'
+                                : 'bg-cyan-950/60 text-cyan-300 border-cyan-600/40'
+                            }`}>
+                              {modemWanLink?.current !== null ? `${modemWanLink?.current} ms` : '—'}
+                            </div>
+                            <div className={`w-12 h-0.5 relative ${
+                              (modemWanLink?.lossPct || 0) > 15 ? 'bg-rose-500' : 'bg-gradient-to-r from-emerald-500 to-cyan-500'
+                            }`} />
+                            <span className={`text-[8px] font-bold ${
+                              (modemWanLink?.lossPct || 0) > 15 ? 'text-rose-400' : 'text-slate-500'
+                            }`}>
+                              {modemWanLink?.lossPct || 0}% loss
+                            </span>
+                          </div>
+                        </>
+                      );
+                    }
+
+                    // Direct Root to Internet Link (fallback if no modem discovered)
+                    return (
+                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                        <span className="text-slate-400 text-[9px]">WAN Uplink</span>
+                        <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
+                          (links['link_gateway_wan']?.lossPct || 0) > 15
+                            ? 'bg-rose-950/60 text-rose-400 border-rose-600/40 animate-pulse'
+                            : 'bg-cyan-950/60 text-cyan-300 border-cyan-600/40'
+                        }`}>
+                          {links['link_gateway_wan']?.current !== null ? `${links['link_gateway_wan']?.current} ms` : '—'}
+                        </div>
+                        <div className={`w-12 h-0.5 relative ${
+                          (links['link_gateway_wan']?.lossPct || 0) > 15 ? 'bg-rose-500' : 'bg-gradient-to-r from-purple-500 to-cyan-500'
+                        }`} />
+                        <span className={`text-[9px] font-bold ${
+                          (links['link_gateway_wan']?.lossPct || 0) > 15 ? 'text-rose-400' : 'text-slate-500'
+                        }`}>
+                          {links['link_gateway_wan']?.lossPct || 0}% loss
+                        </span>
+                      </div>
+                    );
+                  })()}
+
+                  {/* 5. WAN / Internet */}
                   <div
                     onClick={() => setSelectedNode(topology.nodes?.find((n: any) => n.type === 'wan'))}
                     className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[100px] ${
@@ -1156,6 +1396,15 @@ export default function App() {
                             <span className={`font-bold ${node.isWiredBackhaul ? 'text-emerald-400' : 'text-cyan-400'}`}>
                               {node.backhaulType}
                             </span>
+                          </div>
+                        )}
+
+                        {node.type === 'modem' && (
+                          <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 col-span-2 text-xs">
+                            <span className="text-emerald-300 font-bold block">🌐 ISP Optical Network Terminal (ONT) / Modem</span>
+                            <p className="text-slate-300 text-[11px] mt-1 leading-relaxed">
+                              Upstream gateway providing WAN connectivity to your primary router. Monitored via ICMP telemetry to verify physical fiber/cable link integrity.
+                            </p>
                           </div>
                         )}
 
@@ -1347,6 +1596,144 @@ export default function App() {
                 No network incidents or link drops detected. The mesh network has maintained continuous uptime.
               </div>
             )}
+          </div>
+        )}
+
+        {/* TAB 4: CONNECTED DEVICES */}
+        {activeTab === 'devices' && (
+          <div className="glass-panel p-6 flex flex-col gap-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2">
+                  <Users className="w-4 h-4 text-cyan-400" />
+                  <span>Discovered Subnet & Mesh Connected Devices</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Real-time ARP & neighbor table mapping of active clients, smart home accessories, and mesh hardware.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                  <input
+                    type="text"
+                    value={deviceSearch}
+                    onChange={(e) => setDeviceSearch(e.target.value)}
+                    placeholder="Search by IP, MAC, vendor..."
+                    className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-56 sm:w-64"
+                  />
+                </div>
+                <button
+                  onClick={fetchDevices}
+                  disabled={isFetchingDevices}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isFetchingDevices ? 'animate-spin text-cyan-400' : ''}`} />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Device Count Summary Chips */}
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+              <span className="px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700 text-slate-300">
+                Total Devices: <strong className="text-white">{devicesList.length}</strong>
+              </span>
+              <span className="px-2.5 py-1 rounded bg-purple-950/40 border border-purple-800/60 text-purple-300">
+                Private Wi-Fi (Random MAC): <strong className="text-purple-200">{devicesList.filter(d => d.isRandomized).length}</strong>
+              </span>
+              <span className="px-2.5 py-1 rounded bg-indigo-950/40 border border-indigo-800/60 text-indigo-300">
+                Known OUI Vendors: <strong className="text-indigo-200">{devicesList.filter(d => !d.isRandomized && d.vendor !== 'Generic Device').length}</strong>
+              </span>
+            </div>
+
+            {/* Devices Grid */}
+            {(() => {
+              const q = deviceSearch.toLowerCase().trim();
+              const filtered = devicesList.filter(d =>
+                !q ||
+                d.ip?.toLowerCase().includes(q) ||
+                d.mac?.toLowerCase().includes(q) ||
+                d.vendor?.toLowerCase().includes(q) ||
+                d.type?.toLowerCase().includes(q)
+              );
+
+              if (filtered.length === 0) {
+                return (
+                  <div className="py-16 text-center text-xs text-slate-500">
+                    {isFetchingDevices ? 'Scanning local network for connected devices...' : 'No devices found matching your search filter.'}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {filtered.map((dev: any, idx: number) => {
+                    const isApple = dev.vendor?.includes('Apple');
+                    const isSamsung = dev.vendor?.includes('Samsung');
+                    const isGoogle = dev.vendor?.includes('Google');
+                    const isSony = dev.vendor?.includes('Sony');
+                    const isIntel = dev.vendor?.includes('Intel');
+
+                    const getVendorColor = () => {
+                      if (isGoogle) return 'text-purple-400 border-purple-500/30 bg-purple-950/30';
+                      if (isApple) return 'text-cyan-300 border-cyan-500/30 bg-cyan-950/30';
+                      if (isSamsung) return 'text-blue-400 border-blue-500/30 bg-blue-950/30';
+                      if (isSony) return 'text-indigo-400 border-indigo-500/30 bg-indigo-950/30';
+                      if (isIntel) return 'text-emerald-400 border-emerald-500/30 bg-emerald-950/30';
+                      if (dev.isRandomized) return 'text-amber-300 border-amber-500/30 bg-amber-950/30';
+                      return 'text-slate-300 border-slate-700 bg-slate-900/40';
+                    };
+
+                    return (
+                      <div
+                        key={dev.ip || dev.mac || idx}
+                        className="p-3.5 rounded-xl bg-slate-900/80 border border-slate-800 hover:border-slate-700 transition flex flex-col justify-between gap-3"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2.5">
+                            <div className={`p-2 rounded-lg border ${getVendorColor()}`}>
+                              {isGoogle ? <Router className="w-4 h-4" /> :
+                               (isApple || isSamsung || dev.isRandomized) ? <Smartphone className="w-4 h-4" /> :
+                               isIntel ? <Laptop className="w-4 h-4" /> :
+                               <Server className="w-4 h-4" />}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="text-xs font-bold text-white tracking-wide">{dev.vendor || 'Unknown Vendor'}</h4>
+                                {dev.isRandomized && (
+                                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                                    Private MAC
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-400 mt-0.5">{dev.type || 'Connected Client'}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="text-[10px] font-mono text-emerald-400 font-semibold">Active</span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-[10px] font-mono pt-2 border-t border-slate-800/80">
+                          <div>
+                            <span className="text-slate-500 block">IP ADDRESS</span>
+                            <span className="text-slate-200 font-bold">{dev.ip}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-500 block">MAC ADDRESS</span>
+                            <span className="text-slate-400 truncate block">{dev.mac || '—'}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         )}
 

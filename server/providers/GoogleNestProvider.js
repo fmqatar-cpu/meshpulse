@@ -122,6 +122,7 @@ class GoogleNestProvider extends BaseProvider {
           lanLink: status.system.lan0Link,
           ethernetLink: status.wan?.ethernetLink,
           gatewayIp: status.wan?.gatewayIpAddress,
+          localWanIp: status.wan?.localIpAddress,
           wanOnline: status.wan?.online
         };
       }
@@ -356,7 +357,42 @@ class GoogleNestProvider extends BaseProvider {
       media: 'Wi-Fi'
     });
 
-    // 5. WAN / Internet Gateway
+    // 5. Upstream Modem / Fiber ONT Node (if reported by router WAN)
+    const modemIp = rootNode.gatewayIp;
+    let upstreamFromNodeId = rootNodeId;
+
+    if (modemIp && modemIp !== rootNode.ip && modemIp !== '0.0.0.0') {
+      const modemNodeId = 'node_modem';
+      nodes.push({
+        id: modemNodeId,
+        name: `ISP Modem / ONT (${modemIp})`,
+        type: 'modem',
+        role: 'modem',
+        ip: modemIp,
+        ethernetLinked: Boolean(rootNode.ethernetLink),
+        localWanIp: rootNode.localWanIp,
+        status: 'online'
+      });
+
+      links.push({
+        id: 'link_router_modem',
+        from: rootNodeId,
+        to: modemNodeId,
+        name: 'Modem Link (Ethernet)',
+        type: 'modem_link',
+        media: 'Ethernet WAN'
+      });
+
+      probeTargets.push({
+        id: 'link_router_modem',
+        host: modemIp,
+        probeType: 'icmp'
+      });
+
+      upstreamFromNodeId = modemNodeId;
+    }
+
+    // 6. WAN / Internet Gateway
     const wanNodeId = 'node_internet';
     nodes.push({
       id: wanNodeId,
@@ -369,7 +405,7 @@ class GoogleNestProvider extends BaseProvider {
 
     links.push({
       id: 'link_gateway_wan',
-      from: rootNodeId,
+      from: upstreamFromNodeId,
       to: wanNodeId,
       name: 'WAN / ISP Uplink',
       type: 'wan_link',
