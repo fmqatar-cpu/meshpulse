@@ -1413,7 +1413,7 @@ export default function App() {
 
               {/* Dynamic Interactive Node Diagram - Responsive & Visible */}
               <div className="py-8 overflow-x-auto">
-                <div className="flex items-center justify-between gap-2 sm:gap-3 z-10 px-2 min-w-[680px]">
+                <div className="flex items-start justify-between gap-2 sm:gap-3 z-10 px-2 min-w-[680px]">
                   
                   {/* 1. Host PC */}
                   <div
@@ -1545,7 +1545,7 @@ export default function App() {
 
                     // Reusable Link Arrow JSX
                     const renderArrow = (label: string, sublabel: string, latencyMs: number | string | null, lossPct: number = 0, isEmerald: boolean = true) => (
-                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px] pt-7 self-start">
                         <span className="text-slate-400 text-[9px]">{label}</span>
                         <div className={`px-1.5 py-0.5 rounded font-bold border text-center transition-all ${
                           isEmerald
@@ -1579,25 +1579,62 @@ export default function App() {
                             true
                           )}
 
-                          {/* Node: Main Router (First Hop AP) */}
-                          {renderMainRouter(true)}
+                          {/* Node: Main Router Column with Non-transit Parallel Satellites */}
+                          <div className="flex flex-col items-center shrink-0">
+                            {renderMainRouter(true)}
 
-                          {/* Hop 2: Mesh Backhaul to Satellites */}
-                          {satellites.length > 0 && (
-                            <React.Fragment>
-                              {renderArrow(
-                                'Mesh Backhaul',
-                                isWired ? '⚡ 1G RJ45' : '6 GHz',
-                                null,
-                                0,
-                                isWired
-                              )}
-                              {renderSatellitesStack(false)}
-                            </React.Fragment>
-                          )}
+                            {/* Parallel Satellite Branch - NEVER placed between Router and Modem! */}
+                            {satellites.length > 0 && (
+                              <div className="flex flex-col items-center mt-2.5 pt-2 border-t border-dashed border-slate-700/60 w-full animate-fadeIn">
+                                <div className="flex items-center gap-1 text-[8px] font-mono text-slate-400 mb-1.5 px-2 py-0.5 rounded-full bg-slate-950/80 border border-slate-800 shadow-sm">
+                                  <span>↳ Parallel Backhaul:</span>
+                                  <span className={isWired ? 'text-emerald-400 font-bold' : 'text-indigo-400 font-semibold'}>
+                                    {isWired ? '⚡ 1G RJ45' : '📶 6 GHz'}
+                                  </span>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                  {satellites.map((sat: any) => (
+                                    <div
+                                      key={sat.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedNode(sat);
+                                      }}
+                                      className={`cursor-pointer p-2 rounded-xl border flex items-center gap-2 transition hover:scale-105 w-[165px] ${
+                                        selectedNode?.id === sat.id
+                                          ? 'border-indigo-400 bg-indigo-950/40 ring-1 ring-indigo-400/30'
+                                          : 'border-slate-800 bg-slate-900/80 hover:border-slate-700'
+                                      }`}
+                                    >
+                                      <div className="w-7 h-7 rounded-lg bg-slate-800 flex items-center justify-center text-indigo-400 shrink-0">
+                                        <Router className="w-3.5 h-3.5" />
+                                      </div>
+                                      <div className="overflow-hidden text-left">
+                                        <div className="text-xs font-bold text-white truncate">{sat.name}</div>
+                                        <div className="text-[9px] text-slate-400 font-mono truncate">{sat.ip}</div>
+                                        <div className="flex items-center gap-1 mt-0.5">
+                                          <span className="text-[7.5px] font-mono px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-medium">
+                                            Parallel Extender
+                                          </span>
+                                          {sat.isWiredBackhaul && (
+                                            <span className="text-[7.5px] font-mono text-emerald-400 font-bold">1G RJ45</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </React.Fragment>
                       );
                     } else {
+                      // Client is on a Satellite:
+                      // Transit path: Client -> Connected Satellite -> Mesh Backhaul -> Main Router -> Modem -> WAN
+                      const connectedSat = satellites.find((s: any) => s.isCurrentAP) || satellites[0];
+                      const otherSatellites = satellites.filter((s: any) => s.id !== connectedSat?.id);
+
                       return (
                         <React.Fragment>
                           {/* Hop 1: Direct Wi-Fi to Connected Satellite */}
@@ -1609,20 +1646,71 @@ export default function App() {
                             true
                           )}
 
-                          {/* Node: Satellites Stack (First Hop AP) */}
-                          {renderSatellitesStack(true)}
+                          {/* Node: Connected Satellite */}
+                          <div
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedNode(connectedSat);
+                            }}
+                            className={`cursor-pointer p-3 rounded-xl border flex flex-col items-center gap-1.5 transition hover:scale-105 shrink-0 w-[135px] ${
+                              selectedNode?.id === connectedSat?.id
+                                ? 'border-indigo-400 bg-indigo-950/40 ring-2 ring-indigo-500/20'
+                                : 'border-emerald-500/80 bg-emerald-950/30 ring-2 ring-emerald-500/30 shadow-lg shadow-emerald-500/10'
+                            }`}
+                          >
+                            <div className="w-10 h-10 rounded-lg bg-emerald-950/60 border border-emerald-500/40 flex items-center justify-center text-emerald-400 shadow-md">
+                              <Router className="w-5 h-5" />
+                            </div>
+                            <div className="text-center w-full">
+                              <div className="text-xs font-bold text-white truncate">{connectedSat?.name || 'Nest Point'}</div>
+                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">{connectedSat?.ip}</div>
+                              <span className="text-[8px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-semibold inline-block mt-0.5">
+                                Connected AP
+                              </span>
+                            </div>
+                          </div>
 
                           {/* Hop 2: Mesh Backhaul to Main Router */}
                           {renderArrow(
                             'Mesh Backhaul',
-                            isWired ? '⚡ 1G RJ45' : '6 GHz',
-                            null,
-                            0,
-                            isWired
+                            connectedSat?.isWiredBackhaul ? '⚡ 1G RJ45' : '6 GHz',
+                            links['link_client_gateway']?.current !== null ? links['link_client_gateway']?.current : null,
+                            links['link_client_gateway']?.lossPct || 0,
+                            Boolean(connectedSat?.isWiredBackhaul)
                           )}
 
-                          {/* Node: Main Router Gateway */}
-                          {renderMainRouter(false)}
+                          {/* Node: Main Router Column (with any other parallel satellites) */}
+                          <div className="flex flex-col items-center shrink-0">
+                            {renderMainRouter(false)}
+
+                            {otherSatellites.length > 0 && (
+                              <div className="flex flex-col items-center mt-2.5 pt-2 border-t border-dashed border-slate-700/60 w-full animate-fadeIn">
+                                <div className="flex items-center gap-1 text-[8px] font-mono text-slate-400 mb-1 px-2 py-0.5 rounded-full bg-slate-950/80 border border-slate-800">
+                                  <span>↳ Parallel Backhaul</span>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                  {otherSatellites.map((sat: any) => (
+                                    <div
+                                      key={sat.id}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedNode(sat);
+                                      }}
+                                      className="cursor-pointer p-2 rounded-xl border border-slate-800 bg-slate-900/80 hover:border-slate-700 flex items-center gap-2 w-[160px]"
+                                    >
+                                      <div className="w-6 h-6 rounded bg-slate-800 flex items-center justify-center text-indigo-400 shrink-0">
+                                        <Router className="w-3 h-3" />
+                                      </div>
+                                      <div className="overflow-hidden text-left">
+                                        <div className="text-[11px] font-bold text-white truncate">{sat.name}</div>
+                                        <div className="text-[9px] text-slate-400 font-mono truncate">{sat.ip}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </React.Fragment>
                       );
                     }
@@ -1638,7 +1726,7 @@ export default function App() {
                       return (
                         <>
                           {/* Router to Modem Link */}
-                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px] pt-7 self-start">
                             <span className="text-slate-400 text-[9px]">Router ➔ Modem</span>
                             <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
                               (routerModemLink?.lossPct || 0) > 15
@@ -1682,7 +1770,7 @@ export default function App() {
                           </div>
 
                           {/* Modem to Internet WAN Link */}
-                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                          <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px] pt-7 self-start">
                             <span className="text-slate-400 text-[9px]">Modem ➔ WAN</span>
                             <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
                               (modemWanLink?.lossPct || 0) > 15
@@ -1708,7 +1796,7 @@ export default function App() {
 
                     // Direct Root to Internet Link (fallback if no modem discovered)
                     return (
-                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px]">
+                      <div className="flex flex-col items-center justify-center gap-1 font-mono text-[10px] shrink-0 w-[68px] pt-7 self-start">
                         <span className="text-slate-400 text-[9px]">WAN Uplink</span>
                         <div className={`px-1.5 py-0.5 rounded font-bold border text-center ${
                           (links['link_gateway_wan']?.lossPct || 0) > 15
@@ -1941,35 +2029,46 @@ export default function App() {
         {/* TAB 2: HOP-BY-HOP LINK METRICS */}
         {activeTab === 'links' && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {Object.keys(links).map((linkId) => {
-              const link = links[linkId];
-              
-              // Intelligent Hop Classification & Naming
-              let category = 'Local AP Link';
-              let hopTitle = link.host;
-              let hopSubtitle = 'Local Network Hop';
+            {(() => {
+              const getLinkOrder = (id: string) => {
+                if (id === 'link_client_ap') return 1;
+                if (id === 'link_client_gateway') return 2;
+                if (id.includes('router_modem')) return 3;
+                if (id.includes('wan') || id.includes('gateway_wan')) return 4;
+                return 5;
+              };
 
-              if (linkId.includes('wan')) {
-                category = 'WAN Cloud Uplink';
-                hopTitle = 'Internet Edge (1.1.1.1)';
-                hopSubtitle = 'Public Internet Transit';
-              } else if (linkId === 'link_client_ap') {
-                category = 'Direct Wi-Fi Hop';
-                hopTitle = `Connected AP (${link.host})`;
-                hopSubtitle = 'Client Device ➔ Connected Mesh Node';
-              } else if (linkId === 'link_client_gateway') {
-                category = 'Mesh Transit Hop';
-                hopTitle = `Main Router Gateway (${link.host})`;
-                hopSubtitle = 'Client ➔ Root Gateway via Mesh Backhaul';
-              } else if (linkId.includes('router_modem')) {
-                category = 'Modem Uplink';
-                hopTitle = `ISP Modem / ONT (${link.host})`;
-                hopSubtitle = 'Root Router ➔ ISP Broadband Bridge';
-              } else if (linkId.includes('node') || linkId.includes('backhaul')) {
-                category = 'Satellite Mesh Backhaul';
-                hopTitle = `Satellite Node (${link.host})`;
-                hopSubtitle = 'Host ➔ Remote Satellite Node';
-              }
+              const sortedLinkIds = Object.keys(links).sort((a, b) => getLinkOrder(a) - getLinkOrder(b));
+
+              return sortedLinkIds.map((linkId) => {
+                const link = links[linkId];
+                
+                // Intelligent Hop Classification & Naming
+                let category = 'Local AP Link';
+                let hopTitle = link.host;
+                let hopSubtitle = 'Local Network Hop';
+
+                if (linkId.includes('wan')) {
+                  category = 'WAN Cloud Uplink';
+                  hopTitle = 'Internet Edge (1.1.1.1)';
+                  hopSubtitle = 'Public Internet Transit';
+                } else if (linkId === 'link_client_ap') {
+                  category = 'Direct Wi-Fi Hop';
+                  hopTitle = `Connected AP (${link.host})`;
+                  hopSubtitle = 'Client Device ➔ Connected Mesh Node';
+                } else if (linkId === 'link_client_gateway') {
+                  category = 'Mesh Transit Hop';
+                  hopTitle = `Main Router Gateway (${link.host})`;
+                  hopSubtitle = 'Connected Satellite ➔ Root Gateway Backhaul';
+                } else if (linkId.includes('router_modem')) {
+                  category = 'Modem Uplink';
+                  hopTitle = `ISP Modem / ONT (${link.host})`;
+                  hopSubtitle = 'Root Router ➔ ISP Broadband Bridge';
+                } else if (linkId.includes('node') || linkId.includes('backhaul')) {
+                  category = 'Parallel Satellite Link';
+                  hopTitle = `Satellite Node (${link.host})`;
+                  hopSubtitle = 'Main Router ➔ Satellite Mesh Health (Parallel)';
+                }
 
               return (
                 <div key={linkId} className="glass-panel p-5 flex flex-col justify-between">
@@ -2027,7 +2126,8 @@ export default function App() {
                   </div>
                 </div>
               );
-            })}
+            });
+            })()}
           </div>
         )}
 
