@@ -26,9 +26,23 @@ import {
   Zap,
   Gauge,
   ArrowDown,
-  ArrowUp
+  ArrowUp,
+  Download,
+  Upload,
+  Edit2,
+  Tag,
+  FileSpreadsheet
 } from 'lucide-react';
 
+import {
+  DeviceAlias,
+  loadFromLocalStorage,
+  saveToLocalStorage,
+  exportCsvFile,
+  readCsvFile,
+  getAliasForDevice,
+  parseCsv
+} from './services/DeviceAliasService';
 import pkg from '../../package.json';
 
 interface WifiInfo {
@@ -119,6 +133,119 @@ export default function App() {
   const [devicesList, setDevicesList] = useState<any[]>([]);
   const [deviceSearch, setDeviceSearch] = useState('');
   const [isFetchingDevices, setIsFetchingDevices] = useState(false);
+
+  // Custom Device Aliases (loaded from CSV in localStorage)
+  const [deviceAliases, setDeviceAliases] = useState<Record<string, DeviceAlias>>(() => loadFromLocalStorage());
+  const [editingDevice, setEditingDevice] = useState<{
+    mac: string;
+    ip: string;
+    name: string;
+    notes: string;
+    vendor: string;
+  } | null>(null);
+  const [importNotification, setImportNotification] = useState<string | null>(null);
+  const csvFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Sync server CSV on startup for desktop
+  useEffect(() => {
+    const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+    if (!isAndroid) {
+      fetch('/api/devices/aliases')
+        .then(res => res.text())
+        .then(text => {
+          if (text && text.trim().split(/\r?\n/).length > 1) {
+            const parsed = parseCsv(text);
+            if (Object.keys(parsed).length > 0) {
+              setDeviceAliases(prev => {
+                const merged = { ...prev, ...parsed };
+                saveToLocalStorage(merged);
+                return merged;
+              });
+            }
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const handleSaveAlias = (mac: string, ip: string, name: string, notes: string = '') => {
+    setDeviceAliases(prev => {
+      const next = { ...prev };
+      const normMac = (mac || '').trim().toLowerCase().replace(/-/g, ':');
+
+      if (!name.trim()) {
+        if (normMac) delete next[normMac];
+        if (ip) delete next[ip];
+      } else {
+        const alias: DeviceAlias = {
+          mac: normMac,
+          name: name.trim(),
+          ip: ip || '',
+          notes: notes.trim(),
+          updatedAt: new Date().toISOString()
+        };
+        if (normMac) next[normMac] = alias;
+        if (ip) next[ip] = alias;
+      }
+
+      const csv = saveToLocalStorage(next);
+
+      const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+      if (!isAndroid) {
+        fetch('/api/devices/aliases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/csv' },
+          body: csv
+        }).catch(() => {});
+      }
+
+      return next;
+    });
+    setEditingDevice(null);
+  };
+
+  const handleExportCsv = () => {
+    exportCsvFile(deviceAliases, devicesList);
+  };
+
+  const handleImportCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const { count, aliases, rawCsv } = await readCsvFile(file);
+      if (count === 0 && Object.keys(aliases).length === 0) {
+        setImportNotification('CSV file was empty or had no valid rows.');
+        setTimeout(() => setImportNotification(null), 4000);
+        return;
+      }
+
+      setDeviceAliases(prev => {
+        const merged = { ...prev, ...aliases };
+        saveToLocalStorage(merged);
+
+        const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+        if (!isAndroid) {
+          fetch('/api/devices/aliases', {
+            method: 'POST',
+            headers: { 'Content-Type': 'text/csv' },
+            body: rawCsv
+          }).catch(() => {});
+        }
+
+        return merged;
+      });
+
+      setImportNotification(`Successfully imported ${count} device names from CSV!`);
+      setTimeout(() => setImportNotification(null), 4000);
+    } catch (err) {
+      console.error('Import CSV error:', err);
+      setImportNotification('Failed to read CSV file. Please check format.');
+      setTimeout(() => setImportNotification(null), 4000);
+    } finally {
+      e.target.value = '';
+    }
+  };
 
   // Settings form state
   const [settingsProvider, setSettingsProvider] = useState('google_nest');
@@ -1574,11 +1701,35 @@ export default function App() {
 
                     return (
                       <div className="space-y-3">
-                        <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
-                          <div className="text-xs text-slate-400">Node Label</div>
-                          <div className="text-sm font-bold text-white mt-0.5">{node.name}</div>
-                          <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {node.role}</div>
-                        </div>
+                        {(() => {
+                          const nodeAlias = getAliasForDevice(deviceAliases, node.mac, node.ip);
+                          return (
+                            <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-slate-400">Node Label</span>
+                                <button
+                                  onClick={() => setEditingDevice({
+                                    mac: node.mac || '',
+                                    ip: node.ip || '',
+                                    name: nodeAlias?.name || node.name || '',
+                                    notes: nodeAlias?.notes || '',
+                                    vendor: node.model || 'Mesh Node'
+                                  })}
+                                  className="text-[10px] text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 transition"
+                                >
+                                  <Edit2 className="w-3 h-3" /> Rename
+                                </button>
+                              </div>
+                              <div className="text-sm font-bold text-white mt-0.5">
+                                {nodeAlias?.name || node.name}
+                              </div>
+                              {nodeAlias?.name && (
+                                <div className="text-[10px] text-slate-400 mt-0.5">Hardware: {node.name}</div>
+                              )}
+                              <div className="text-xs text-indigo-400 font-mono mt-0.5">Role: {node.role}</div>
+                            </div>
+                          );
+                        })()}
 
                         <div className="grid grid-cols-2 gap-2 text-xs font-mono">
                           <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
@@ -1857,27 +2008,61 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <div className="relative">
                   <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                   <input
                     type="text"
                     value={deviceSearch}
                     onChange={(e) => setDeviceSearch(e.target.value)}
-                    placeholder="Search by IP, MAC, vendor..."
-                    className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-56 sm:w-64"
+                    placeholder="Search by name, IP, MAC, vendor..."
+                    className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500 w-52 sm:w-60"
                   />
                 </div>
                 <button
+                  onClick={handleExportCsv}
+                  title="Export device names & inventory to CSV file"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
+                >
+                  <Download className="w-3.5 h-3.5 text-cyan-400" />
+                  <span className="hidden sm:inline">Export CSV</span>
+                </button>
+                <button
+                  onClick={() => csvFileInputRef.current?.click()}
+                  title="Import device names from a CSV file"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
+                >
+                  <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="hidden sm:inline">Import CSV</span>
+                </button>
+                <input
+                  type="file"
+                  ref={csvFileInputRef}
+                  onChange={handleImportCsv}
+                  accept=".csv,text/csv"
+                  className="hidden"
+                />
+                <button
                   onClick={fetchDevices}
                   disabled={isFetchingDevices}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
+                  className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition active:scale-95"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isFetchingDevices ? 'animate-spin text-cyan-400' : ''}`} />
                   <span>Refresh</span>
                 </button>
               </div>
             </div>
+
+            {/* CSV Import / Action Notification Banner */}
+            {importNotification && (
+              <div className="p-3 rounded-xl bg-emerald-950/60 border border-emerald-600/60 text-emerald-300 text-xs font-medium flex items-center justify-between animate-fadeIn">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>{importNotification}</span>
+                </div>
+                <button onClick={() => setImportNotification(null)} className="text-emerald-400 hover:text-white text-xs">✕</button>
+              </div>
+            )}
 
             {/* Device Count Summary Chips */}
             <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
@@ -1895,13 +2080,18 @@ export default function App() {
             {/* Devices Grid */}
             {(() => {
               const q = deviceSearch.toLowerCase().trim();
-              const filtered = devicesList.filter(d =>
-                !q ||
-                d.ip?.toLowerCase().includes(q) ||
-                d.mac?.toLowerCase().includes(q) ||
-                d.vendor?.toLowerCase().includes(q) ||
-                d.type?.toLowerCase().includes(q)
-              );
+              const filtered = devicesList.filter(d => {
+                const alias = getAliasForDevice(deviceAliases, d.mac, d.ip);
+                return (
+                  !q ||
+                  d.ip?.toLowerCase().includes(q) ||
+                  d.mac?.toLowerCase().includes(q) ||
+                  d.vendor?.toLowerCase().includes(q) ||
+                  d.type?.toLowerCase().includes(q) ||
+                  alias?.name?.toLowerCase().includes(q) ||
+                  alias?.notes?.toLowerCase().includes(q)
+                );
+              });
 
               if (filtered.length === 0) {
                 return (
@@ -1930,6 +2120,9 @@ export default function App() {
                       return 'text-slate-300 border-slate-700 bg-slate-900/40';
                     };
 
+                    const alias = getAliasForDevice(deviceAliases, dev.mac, dev.ip);
+                    const hasCustomName = Boolean(alias?.name);
+
                     return (
                       <div
                         key={dev.ip || dev.mac || idx}
@@ -1945,20 +2138,46 @@ export default function App() {
                             </div>
                             <div>
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <h4 className="text-xs font-bold text-white tracking-wide">{dev.vendor || 'Unknown Vendor'}</h4>
+                                <h4 className={`text-xs font-bold tracking-wide ${hasCustomName ? 'text-cyan-300 font-mono' : 'text-white'}`}>
+                                  {hasCustomName ? alias?.name : (dev.vendor || 'Unknown Vendor')}
+                                </h4>
+                                {hasCustomName && (
+                                  <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-cyan-950/80 text-cyan-300 border border-cyan-700/60 font-semibold flex items-center gap-1">
+                                    <Tag className="w-2.5 h-2.5" /> Custom
+                                  </span>
+                                )}
                                 {dev.isRandomized && (
                                   <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
                                     Private MAC
                                   </span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-400 mt-0.5">{dev.type || 'Connected Client'}</p>
+                              <p className="text-[11px] text-slate-400 mt-0.5">
+                                {hasCustomName ? `${dev.vendor || 'Generic Device'} • ${dev.type || 'Connected Client'}` : (dev.type || 'Connected Client')}
+                              </p>
+                              {alias?.notes && (
+                                <p className="text-[10px] text-cyan-400/80 italic mt-0.5 font-mono">
+                                  {alias.notes}
+                                </p>
+                              )}
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0">
-                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                            <span className="text-[10px] font-mono text-emerald-400 font-semibold">Active</span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => setEditingDevice({
+                                mac: dev.mac || '',
+                                ip: dev.ip || '',
+                                name: alias?.name || '',
+                                notes: alias?.notes || '',
+                                vendor: dev.vendor || 'Generic Device'
+                              })}
+                              title="Assign custom name & notes (saved to CSV)"
+                              className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 active:scale-95 text-slate-400 hover:text-cyan-300 border border-slate-700/80 transition"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse ml-0.5" />
                           </div>
                         </div>
 
@@ -2243,6 +2462,103 @@ export default function App() {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* CUSTOM DEVICE NAME MODAL (CSV BACKED) */}
+      {editingDevice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="glass-panel w-full max-w-md p-6 bg-slate-900/95 border border-slate-800 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-cyan-950/80 border border-cyan-800/80 text-cyan-400">
+                  <Tag className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Assign Custom Device Name</h3>
+                  <p className="text-[11px] text-slate-400">Saved to CSV in local storage • Exportable to any station/phone</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditingDevice(null)}
+                className="text-slate-400 hover:text-white text-base font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="my-4 space-y-3">
+              <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800 text-xs font-mono space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">HARDWARE VENDOR:</span>
+                  <span className="text-slate-200 font-semibold">{editingDevice.vendor}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">MAC ADDRESS:</span>
+                  <span className="text-slate-300">{editingDevice.mac || '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">IP ADDRESS:</span>
+                  <span className="text-slate-300">{editingDevice.ip || '—'}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                  Custom Device Name / Alias
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Living Room Apple TV, Dad's Galaxy S24, Office Printer"
+                  value={editingDevice.name}
+                  onChange={(e) => setEditingDevice({ ...editingDevice, name: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+                  Notes / Location (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Master Bedroom, Upstairs, Wired Port 2"
+                  value={editingDevice.notes}
+                  onChange={(e) => setEditingDevice({ ...editingDevice, notes: e.target.value })}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              {editingDevice.name ? (
+                <button
+                  type="button"
+                  onClick={() => handleSaveAlias(editingDevice.mac, editingDevice.ip, '', '')}
+                  className="px-3 py-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-800/60 text-xs font-semibold transition"
+                >
+                  Clear Alias
+                </button>
+              ) : <div />}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingDevice(null)}
+                  className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSaveAlias(editingDevice.mac, editingDevice.ip, editingDevice.name, editingDevice.notes)}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md active:scale-95 transition"
+                >
+                  Save Name
+                </button>
+              </div>
             </div>
           </div>
         </div>

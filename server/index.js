@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const path = require('path');
+const fs = require('fs');
 
 const configManager = require('./services/ConfigManager');
 const wifiScanner = require('./services/WifiScanner');
@@ -16,6 +17,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.json());
+app.use(express.text({ type: ['text/csv', 'text/plain'], limit: '5mb' }));
 
 // Forward speedtest background updates to WebSocket clients
 speedtestService.onUpdate((event, data) => {
@@ -183,6 +185,28 @@ app.get('/api/devices', async (req, res) => {
       count: devices.length,
       devices
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const aliasesCsvPath = path.join(__dirname, '../data/device_aliases.csv');
+
+app.get('/api/devices/aliases', (req, res) => {
+  if (fs.existsSync(aliasesCsvPath)) {
+    res.setHeader('Content-Type', 'text/csv');
+    res.sendFile(aliasesCsvPath);
+  } else {
+    res.setHeader('Content-Type', 'text/csv');
+    res.send('mac,name,ip,notes,updated_at\n');
+  }
+});
+
+app.post('/api/devices/aliases', (req, res) => {
+  try {
+    const csvContent = typeof req.body === 'string' ? req.body : (req.body?.csv || '');
+    fs.writeFileSync(aliasesCsvPath, csvContent, 'utf8');
+    res.json({ success: true, count: Math.max(0, csvContent.split(/\r?\n/).filter(l => l.trim()).length - 1) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
