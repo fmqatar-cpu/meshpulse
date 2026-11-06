@@ -256,7 +256,6 @@ class AndroidBridge(private val context: Context) {
     fun discoverMeshNodes(gatewayIp: String, subnetPrefix: String): String {
         val nodesArray = JSONArray()
         try {
-            val arpMap = getArpTable()
             val prefix = if (subnetPrefix.isNotEmpty() && subnetPrefix.endsWith(".")) {
                 subnetPrefix
             } else if (gatewayIp.isNotEmpty()) {
@@ -289,7 +288,6 @@ class AndroidBridge(private val context: Context) {
                                 val sys = rootJson.getJSONObject("system")
                                 val nodeObj = JSONObject()
                                 nodeObj.put("ip", targetIp)
-                                nodeObj.put("mac", arpMap[targetIp] ?: "")
                                 nodeObj.put("model", sys.optString("modelId", "Nest Wifi Pro"))
                                 nodeObj.put("role", sys.optString("groupRole", if (targetIp == gatewayIp) "root" else "leaf"))
                                 nodeObj.put("hardwareId", sys.optString("hardwareId", ""))
@@ -322,15 +320,23 @@ class AndroidBridge(private val context: Context) {
             }
 
             val futures: List<Future<JSONObject?>> = executor.invokeAll(tasks, 2500L, TimeUnit.MILLISECONDS)
+            val discoveredList = mutableListOf<JSONObject>()
             for (f in futures) {
                 try {
                     val obj = f.get()
                     if (obj != null) {
-                        nodesArray.put(obj)
+                        discoveredList.add(obj)
                     }
-                } catch (e: Exception) {
-                    // Task cancelled or failed
-                }
+                } catch (e: Exception) {}
+            }
+
+            // Immediately refresh ARP table AFTER sending packets to each node so the kernel ARP cache is populated!
+            val arpMap = getArpTable()
+            for (nodeObj in discoveredList) {
+                val ip = nodeObj.optString("ip", "")
+                val mac = arpMap[ip] ?: ""
+                nodeObj.put("mac", mac)
+                nodesArray.put(nodeObj)
             }
         } catch (e: Exception) {
             // General discovery error
@@ -340,48 +346,78 @@ class AndroidBridge(private val context: Context) {
 
     private fun getArpTable(): Map<String, String> {
         val map = mutableMapOf<String, String>()
+        val macRegex = "([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}".toRegex()
+        val ipRegex = "^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})$".toRegex()
         try {
             val process = Runtime.getRuntime().exec("ip neigh")
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val parts = line!!.trim().split("\\s+".toRegex())
-                if (parts.size >= 5 && parts[0].matches("[0-9.]+".toRegex()) && parts[4].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
-                    map[parts[0]] = parts[4].lowercase()
+                var ip: String? = null
+                var mac: String? = null
+                for (p in parts) {
+                    if (ip == null && p.matches(ipRegex)) {
+                        ip = p
+                    } else if (p.matches(macRegex) && p != "00:00:00:00:00:00") {
+                        mac = p.lowercase().replace('-', ':')
+                    }
+                }
+                if (ip != null && mac != null) {
+                    map[ip] = mac
                 }
             }
             reader.close()
             process.waitFor()
-        } catch (e: Exception) {
-            try {
-                val file = java.io.File("/proc/net/arp")
-                if (file.exists()) {
-                    file.forEachLine { l ->
-                        val p = l.trim().split("\\s+".toRegex())
-                        if (p.size >= 4 && p[0].matches("[0-9.]+".toRegex()) && p[3].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
-                            map[p[0]] = p[3].lowercase()
+        } catch (e: Exception) {}
+        try {
+            val file = java.io.File("/proc/net/arp")
+            if (file.exists()) {
+                file.forEachLine { l ->
+                    val parts = l.trim().split("\\s+".toRegex())
+                    var ip: String? = null
+                    var mac: String? = null
+                    for (p in parts) {
+                        if (ip == null && p.matches(ipRegex)) {
+                            ip = p
+                        } else if (p.matches(macRegex) && p != "00:00:00:00:00:00") {
+                            mac = p.lowercase().replace('-', ':')
                         }
                     }
+                    if (ip != null && mac != null && !map.containsKey(ip)) {
+                        map[ip] = mac
+                    }
                 }
-            } catch (ex: Exception) {}
-        }
+            }
+        } catch (ex: Exception) {}
         return map
     }
 
     @JavascriptInterface
     fun getConnectedDevices(): String {
         val array = JSONArray()
+        val macRegex = "([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}".toRegex()
+        val ipRegex = "^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})$".toRegex()
         try {
             val process = Runtime.getRuntime().exec("ip neigh")
             val reader = BufferedReader(InputStreamReader(process.inputStream))
             var line: String?
             while (reader.readLine().also { line = it } != null) {
                 val parts = line!!.trim().split("\\s+".toRegex())
-                if (parts.size >= 5 && parts[0].matches("[0-9.]+".toRegex()) && parts[4].matches("([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}".toRegex())) {
+                var ip: String? = null
+                var mac: String? = null
+                for (p in parts) {
+                    if (ip == null && p.matches(ipRegex)) {
+                        ip = p
+                    } else if (p.matches(macRegex) && p != "00:00:00:00:00:00") {
+                        mac = p.lowercase().replace('-', ':')
+                    }
+                }
+                if (ip != null && mac != null) {
                     val obj = JSONObject()
-                    obj.put("ip", parts[0])
-                    obj.put("mac", parts[4].lowercase())
-                    obj.put("status", if (parts.size > 5) parts[5] else "REACHABLE")
+                    obj.put("ip", ip)
+                    obj.put("mac", mac)
+                    obj.put("status", if (parts.size > 5) parts[parts.size - 1] else "REACHABLE")
                     array.put(obj)
                 }
             }

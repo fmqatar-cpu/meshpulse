@@ -501,6 +501,7 @@ export default function App() {
 
       const androidHistory: Record<string, { t: number; ms: number | null }[]> = {
         link_client_ap: [],
+        link_client_gateway: [],
         link_router_modem: [],
         link_gateway_wan: []
       };
@@ -532,38 +533,124 @@ export default function App() {
           const gatewayIp = wifiParsed.gatewayIp || '192.168.1.1';
           const subnetPrefix = gatewayIp.substring(0, gatewayIp.lastIndexOf('.') + 1);
 
-          // Periodic or triggered mesh discovery sweep
+          // 1. Mesh Node Discovery Sweep (every 8 seconds or when empty)
           const now = Date.now();
-          if (now - lastMeshSweep > 12000 || cachedDiscoveredNodes.length === 0) {
+          if (now - lastMeshSweep > 8000 || cachedDiscoveredNodes.length === 0) {
             lastMeshSweep = now;
             try {
               const rawDiscovered = bridge.discoverMeshNodes(gatewayIp, subnetPrefix);
-              cachedDiscoveredNodes = JSON.parse(rawDiscovered || '[]');
-            } catch (e) {
-              // discovery fallback
-            }
+              const parsed = JSON.parse(rawDiscovered || '[]');
+              if (parsed && parsed.length > 0) {
+                cachedDiscoveredNodes = parsed;
+              }
+            } catch (e) {}
           }
 
-          // Get visible BSSIDs
+          // Visible BSSIDs
           let visibleBssids: any[] = [];
           try {
             visibleBssids = JSON.parse(bridge.getVisibleBssids() || '[]');
           } catch (e) {}
 
-          const apPingRaw = JSON.parse(bridge.ping(gatewayIp, 1));
+          // 2. Root vs Leaf Separation
+          const rootCandidate = cachedDiscoveredNodes.find(n => n.role === 'root') ||
+                                cachedDiscoveredNodes.find(n => n.ip === gatewayIp) || {
+            ip: gatewayIp,
+            model: 'Nest Wifi Pro',
+            role: 'root',
+            mac: ''
+          };
+
+          const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
+
+          // 3. Real Path Discovery: Determine Connected Node via 5-octet BSSID Match, then 4-octet, then Latency
+          const clientBssid = (wifiParsed.bssid || '').toLowerCase().replace(/[:-]/g, '');
+          let connectedNode: any = null;
+
+          if (clientBssid && clientBssid.length >= 8) {
+            // Check 5 octets (10 hex characters) - e.g. "fc915dcd00" vs "fc915dcd05"
+            const bssidPrefix5 = clientBssid.slice(0, 10);
+            const satMatch5 = leafCandidates.find(leaf => {
+              const leafMac = (leaf.mac || '').toLowerCase().replace(/[:-]/g, '');
+              return leafMac.length >= 10 && leafMac.startsWith(bssidPrefix5);
+            });
+            const rootMac = (rootCandidate.mac || '').toLowerCase().replace(/[:-]/g, '');
+            const rootMatch5 = (rootMac.length >= 10 && rootMac.startsWith(bssidPrefix5));
+
+            if (satMatch5) {
+              connectedNode = satMatch5;
+            } else if (rootMatch5) {
+              connectedNode = rootCandidate;
+            } else {
+              // Check 4 octets (8 hex characters)
+              const bssidPrefix4 = clientBssid.slice(0, 8);
+              const satMatch4 = leafCandidates.find(leaf => {
+                const leafMac = (leaf.mac || '').toLowerCase().replace(/[:-]/g, '');
+                return leafMac.length >= 8 && leafMac.startsWith(bssidPrefix4);
+              });
+              const rootMatch4 = (rootMac.length >= 8 && rootMac.startsWith(bssidPrefix4));
+
+              if (satMatch4) {
+                connectedNode = satMatch4;
+              } else if (rootMatch4) {
+                connectedNode = rootCandidate;
+              }
+            }
+          }
+
+          // 4. Latency Discovery Fallback if BSSID MAC was redacted
+          if (!connectedNode && leafCandidates.length > 0) {
+            try {
+              const rootPing = JSON.parse(bridge.ping(rootCandidate.ip, 1));
+              const leafPing = JSON.parse(bridge.ping(leafCandidates[0].ip, 1));
+              if (leafPing.success && rootPing.success) {
+                // Direct Wi-Fi hop to connected AP is lower latency than backhaul hop
+                connectedNode = (leafPing.latency < rootPing.latency - 1) ? leafCandidates[0] : rootCandidate;
+              } else if (leafPing.success) {
+                connectedNode = leafCandidates[0];
+              } else {
+                connectedNode = rootCandidate;
+              }
+            } catch (e) {
+              connectedNode = rootCandidate;
+            }
+          } else if (!connectedNode) {
+            connectedNode = rootCandidate;
+          }
+
+          const isClientOnRoot = (connectedNode.ip === rootCandidate.ip);
+
+          // 5. Active Pings based on actual discovered path
+          const targetApIp = connectedNode.ip;
           const modemIp = '192.168.100.1';
+
+          const apPingRaw = JSON.parse(bridge.ping(targetApIp, 1));
+          let gatewayPingRaw = { success: false, latency: 0 };
+          if (!isClientOnRoot) {
+            try {
+              gatewayPingRaw = JSON.parse(bridge.ping(rootCandidate.ip, 1));
+            } catch (e) {}
+          }
+
           let modemPingRaw = { success: false, latency: 0 };
           try {
             modemPingRaw = JSON.parse(bridge.ping(modemIp, 1) || '{"success":false,"latency":0}');
           } catch (e) {}
+
           const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
 
           const apMs = apPingRaw.success ? Math.round(apPingRaw.latency) : null;
+          const gatewayMs = gatewayPingRaw.success ? Math.round(gatewayPingRaw.latency) : null;
           const modemMs = modemPingRaw.success ? Math.round(modemPingRaw.latency) : null;
           const wanMs = wanPingRaw.success ? Math.round(wanPingRaw.latency) : null;
 
           androidHistory.link_client_ap.push({ t: now, ms: apMs });
           if (androidHistory.link_client_ap.length > 25) androidHistory.link_client_ap.shift();
+
+          if (!isClientOnRoot) {
+            androidHistory.link_client_gateway.push({ t: now, ms: gatewayMs });
+            if (androidHistory.link_client_gateway.length > 25) androidHistory.link_client_gateway.shift();
+          }
 
           if (!androidHistory.link_router_modem) androidHistory.link_router_modem = [];
           androidHistory.link_router_modem.push({ t: now, ms: modemMs });
@@ -592,10 +679,14 @@ export default function App() {
           };
 
           const linkStats: Record<string, any> = {
-            link_client_ap: calcStats('link_client_ap', gatewayIp, androidHistory.link_client_ap),
+            link_client_ap: calcStats('link_client_ap', targetApIp, androidHistory.link_client_ap),
             link_router_modem: calcStats('link_router_modem', modemIp, androidHistory.link_router_modem),
             link_gateway_wan: calcStats('link_gateway_wan', '1.1.1.1', androidHistory.link_gateway_wan)
           };
+
+          if (!isClientOnRoot) {
+            linkStats['link_client_gateway'] = calcStats('link_client_gateway', rootCandidate.ip, androidHistory.link_client_gateway);
+          }
 
           // Load local overrides
           let nodeOverrides: Record<string, any> = {};
@@ -632,44 +723,7 @@ export default function App() {
 
             const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
 
-            // Determine which node the phone is connected to using robust BSSID MAC matching
-            const clientBssid = (wifiParsed.bssid || '').toLowerCase().replace(/[:-]/g, '');
-            let connectedNode = rootCandidate;
-
-            if (clientBssid && clientBssid.length >= 10) {
-              const rootMacClean = (rootCandidate.mac || '').toLowerCase().replace(/[:-]/g, '');
-
-              // 1. Check 5-octet match (10 hex characters)
-              let match = null;
-              if (rootMacClean.length >= 10 && clientBssid.startsWith(rootMacClean.slice(0, 10))) {
-                match = rootCandidate;
-              }
-              if (!match) {
-                match = leafCandidates.find(leaf => {
-                  const leafMacClean = (leaf.mac || leaf.hardwareId || '').toLowerCase().replace(/[:-]/g, '');
-                  return leafMacClean.length >= 10 && clientBssid.startsWith(leafMacClean.slice(0, 10));
-                });
-              }
-
-              // 2. Check 4.5-octet match (9 hex characters)
-              if (!match && rootMacClean.length >= 9 && clientBssid.startsWith(rootMacClean.slice(0, 9))) {
-                match = rootCandidate;
-              }
-              if (!match) {
-                match = leafCandidates.find(leaf => {
-                  const leafMacClean = (leaf.mac || leaf.hardwareId || '').toLowerCase().replace(/[:-]/g, '');
-                  return leafMacClean.length >= 9 && clientBssid.startsWith(leafMacClean.slice(0, 9));
-                });
-              }
-
-              if (match) {
-                connectedNode = match;
-              }
-            }
-
             const rootNodeId = `node_nest_${rootCandidate.ip.replace(/\./g, '_')}`;
-            const isClientOnRoot = (connectedNode.ip === rootCandidate.ip);
-
             nodes.push({
               id: rootNodeId,
               name: `${rootCandidate.model || 'Nest Wifi Pro'} (Main Router)`,
@@ -1449,12 +1503,9 @@ export default function App() {
 
                     const satellites = topology.nodes?.filter((n: any) => n.type === 'satellite') || [];
 
-                    // Accurately determine if client is connected to Root or Satellite
-                    const isClientOnRoot = Boolean(
-                      rootNode?.isCurrentAP ||
-                      (links['link_client_ap'] && links['link_client_ap'].host === rootNode.ip) ||
-                      (!satellites.some((s: any) => s.isCurrentAP))
-                    );
+                    // Real Path Topology: If any satellite is the active connected AP, route through that satellite
+                    const isClientOnSatellite = satellites.some((s: any) => s.isCurrentAP);
+                    const isClientOnRoot = !isClientOnSatellite;
 
                     const activeSat = satellites.find((s: any) => s.isCurrentAP) || satellites[0];
                     const isWired = activeSat?.isWiredBackhaul || satellites.some((s: any) => s.isWiredBackhaul);
