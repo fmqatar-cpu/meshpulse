@@ -281,33 +281,3 @@ class DiagnosisEngine {
 }
 
 module.exports = new DiagnosisEngine();
-
-  recordIncidents(currentIssues) {
-    const now = Date.now();
-    for (const issue of currentIssues) {
-      const existing = this.incidents.find(i => i.id === issue.id && !i.resolvedAt);
-      if (!existing) {
-        this.incidents.unshift({
-          ...issue,
-          timestamp: now,
-          resolvedAt: null
-        });
-        if (this.incidents.length > this.maxIncidents) {
-          this.incidents.pop();
-        }
-      }
-    }
-
-    // Mark disappeared incidents as resolved
-    for (const incident of this.incidents) {
-      if (!incident.resolvedAt) {
-        const stillPresent = currentIssues.some(i => i.id === incident.id);
-        if (!stillPresent) {
-          incident.resolvedAt = now;
-        }
-      }
-    }
-  }
-}
-
-module.exports = new DiagnosisEngine();
