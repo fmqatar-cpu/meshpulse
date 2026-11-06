@@ -22,7 +22,11 @@ import {
   Server,
   Smartphone,
   Search,
-  Users
+  Users,
+  Zap,
+  Gauge,
+  ArrowDown,
+  ArrowUp
 } from 'lucide-react';
 
 import pkg from '../../package.json';
@@ -123,6 +127,132 @@ export default function App() {
   const [customNameInput, setCustomNameInput] = useState('');
   const [customNodes, setCustomNodes] = useState<any[]>([]);
 
+  // Speedtest state (runs non-blocking in background)
+  const [speedtestState, setSpeedtestState] = useState<{
+    isRunning: boolean;
+    currentStage: string;
+    lastResult: any;
+    history: any[];
+  }>({
+    isRunning: false,
+    currentStage: 'idle',
+    lastResult: null,
+    history: []
+  });
+  const [isSpeedtestModalOpen, setIsSpeedtestModalOpen] = useState(false);
+  const [speedtestAutoHourly, setSpeedtestAutoHourly] = useState(() => {
+    try {
+      const v = localStorage.getItem('meshpulse_speedtest_hourly');
+      return v !== null ? JSON.parse(v) : true;
+    } catch {
+      return true;
+    }
+  });
+  const [speedtestRunOnRescan, setSpeedtestRunOnRescan] = useState(() => {
+    try {
+      const v = localStorage.getItem('meshpulse_speedtest_rescan');
+      return v !== null ? JSON.parse(v) : true;
+    } catch {
+      return true;
+    }
+  });
+
+  // Automated hourly speedtest interval
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!speedtestAutoHourly || speedtestState.isRunning) return;
+      const last = speedtestState.lastResult?.timestamp || 0;
+      if (Date.now() - last >= 60 * 60 * 1000) {
+        runSpeedtest();
+      }
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [speedtestAutoHourly, speedtestState.isRunning, speedtestState.lastResult]);
+
+  // Background Speedtest runner (Desktop via API, Android via direct browser fetch)
+  const runSpeedtest = async () => {
+    if (speedtestState.isRunning) return;
+
+    const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
+    if (!isAndroid) {
+      setSpeedtestState(prev => ({ ...prev, isRunning: true, currentStage: 'download' }));
+      try {
+        await fetch('/api/speedtest', { method: 'POST' });
+      } catch (e) {
+        console.error('Trigger speedtest error:', e);
+        setSpeedtestState(prev => ({ ...prev, isRunning: false, currentStage: 'idle' }));
+      }
+      return;
+    }
+
+    // Android standalone background test
+    setSpeedtestState(prev => ({ ...prev, isRunning: true, currentStage: 'download' }));
+    try {
+      const t0 = Date.now();
+      const res = await fetch('https://speed.cloudflare.com/__down?bytes=10000000', {
+        headers: { 'Cache-Control': 'no-cache' }
+      });
+      const reader = res.body?.getReader();
+      let totalBytes = 0;
+      let firstByteTime: number | null = null;
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!firstByteTime) firstByteTime = Date.now();
+          totalBytes += value.length;
+        }
+      } else {
+        const buf = await res.arrayBuffer();
+        totalBytes = buf.byteLength;
+      }
+      const t1 = Date.now();
+      const dlSec = Math.max((t1 - (firstByteTime || t0)) / 1000, 0.05);
+      const downloadMbps = Math.round(((totalBytes * 8) / (dlSec * 1000000)) * 10) / 10;
+      const pingMs = firstByteTime ? (firstByteTime - t0) : (t1 - t0);
+
+      // Upload test
+      setSpeedtestState(prev => ({ ...prev, currentStage: 'upload' }));
+      const upBytes = 2 * 1024 * 1024;
+      const upPayload = new Uint8Array(upBytes);
+      const ut0 = Date.now();
+      await fetch('https://speed.cloudflare.com/__up', {
+        method: 'POST',
+        body: upPayload
+      });
+      const ut1 = Date.now();
+      const upSec = Math.max((ut1 - ut0) / 1000, 0.05);
+      const uploadMbps = Math.round(((upBytes * 8) / (upSec * 1000000)) * 10) / 10;
+
+      const result = {
+        timestamp: Date.now(),
+        downloadMbps,
+        uploadMbps,
+        pingMs,
+        bytesDownloaded: totalBytes,
+        bytesUploaded: upBytes
+      };
+
+      setSpeedtestState(prev => {
+        const nextHist = [result, ...(prev.history || [])].slice(0, 30);
+        try {
+          localStorage.setItem('meshpulse_speedtest_history', JSON.stringify(nextHist));
+          localStorage.setItem('meshpulse_speedtest_last', JSON.stringify(result));
+        } catch (e) {}
+        return {
+          isRunning: false,
+          currentStage: 'idle',
+          lastResult: result,
+          history: nextHist
+        };
+      });
+    } catch (e) {
+      console.error('Android background speedtest error:', e);
+      setSpeedtestState(prev => ({ ...prev, isRunning: false, currentStage: 'idle' }));
+    }
+  };
+
   const wsRef = useRef<WebSocket | null>(null);
 
   // Fetch initial HTTP status
@@ -133,6 +263,7 @@ export default function App() {
         const data = await res.json();
         setSnapshot(data);
         if (data.activeProvider) setActiveProvider(data.activeProvider);
+        if (data.speedtest) setSpeedtestState(data.speedtest);
         if (data.config) {
           setSettingsProvider(data.config.selectedProvider || 'auto');
           setSettingsInterval(data.config.pingIntervalMs || 1000);
@@ -674,7 +805,9 @@ export default function App() {
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'SNAPSHOT' || msg.type === 'TOPOLOGY_UPDATE') {
+          if (msg.type === 'SPEEDTEST_UPDATE') {
+            setSpeedtestState(msg.data);
+          } else if (msg.type === 'SNAPSHOT' || msg.type === 'TOPOLOGY_UPDATE') {
             setSnapshot(msg.data);
             if (msg.data.activeProvider) setActiveProvider(msg.data.activeProvider);
           } else if (msg.type === 'TELEMETRY_UPDATE') {
@@ -724,6 +857,9 @@ export default function App() {
       }
       await fetch('/api/rescan', { method: 'POST' });
       await fetchStatus();
+      if (speedtestRunOnRescan) {
+        runSpeedtest();
+      }
     } catch (e) {
       console.error('Rescan failed:', e);
     } finally {
@@ -733,13 +869,18 @@ export default function App() {
 
   const handleSaveSettings = async () => {
     try {
+      localStorage.setItem('meshpulse_speedtest_hourly', JSON.stringify(speedtestAutoHourly));
+      localStorage.setItem('meshpulse_speedtest_rescan', JSON.stringify(speedtestRunOnRescan));
+
       const isAndroid = typeof (window as any).AndroidBridge !== 'undefined';
       if (isAndroid) {
         // Save locally for Android native mode
         localStorage.setItem('meshpulse_android_config', JSON.stringify({
           selectedProvider: settingsProvider,
           pingIntervalMs: Number(settingsInterval),
-          customNodes
+          customNodes,
+          speedtestAutoHourly,
+          speedtestRunOnRescan
         }));
         setIsSettingsOpen(false);
         return;
@@ -751,7 +892,12 @@ export default function App() {
         body: JSON.stringify({
           selectedProvider: settingsProvider,
           pingIntervalMs: Number(settingsInterval),
-          customNodes
+          customNodes,
+          speedtest: {
+            enabled: speedtestAutoHourly,
+            intervalMinutes: 60,
+            runOnRescan: speedtestRunOnRescan
+          }
         })
       });
 
@@ -916,6 +1062,35 @@ export default function App() {
               <span className="text-slate-500">|</span>
               <span className="text-emerald-400 font-mono font-semibold">{wifi.signal}% ({wifi.rssi} dBm)</span>
             </div>
+          )}
+
+          {/* Non-disturbing Background Speedtest Indicator / Button */}
+          {speedtestState.isRunning ? (
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-cyan-950/60 border border-cyan-700/60 text-cyan-300 text-xs shadow-sm">
+              <Zap className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              <span className="font-mono text-[11px] font-semibold">
+                Speedtest: {speedtestState.currentStage}...
+              </span>
+            </div>
+          ) : speedtestState.lastResult ? (
+            <button
+              onClick={() => setIsSpeedtestModalOpen(true)}
+              title="Click to view Speedtest telemetry and history"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition active:scale-95"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-mono font-bold text-white">{speedtestState.lastResult.downloadMbps}</span>
+              <span className="text-[10px] text-slate-400 font-mono">Mbps</span>
+            </button>
+          ) : (
+            <button
+              onClick={runSpeedtest}
+              title="Run background bandwidth speedtest"
+              className="flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition active:scale-95"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline">Speedtest</span>
+            </button>
           )}
 
           <button
@@ -1412,7 +1587,7 @@ export default function App() {
                           </div>
                           <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
                             <span className="text-slate-500 block text-[10px]">HARDWARE MODEL</span>
-                            <span className="text-slate-200 font-bold">{node.model || 'Nest Wifi Pro'}</span>
+                            <span className="text-slate-200 font-bold">{node.model || (node.type === 'modem' ? 'ISP Modem / ONT (Unknown)' : node.type === 'wan' ? 'Cloud Edge (1.1.1.1)' : node.type === 'client' ? 'Client Host' : 'Unknown')}</span>
                           </div>
                           {node.mac && (
                             <div className="p-2.5 rounded-lg bg-slate-900/60 border border-slate-800">
@@ -1527,18 +1702,44 @@ export default function App() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {Object.keys(links).map((linkId) => {
               const link = links[linkId];
-              const isWan = linkId.includes('wan');
-              const isBackhaul = linkId.includes('node') || linkId.includes('backhaul');
+              
+              // Intelligent Hop Classification & Naming
+              let category = 'Local AP Link';
+              let hopTitle = link.host;
+              let hopSubtitle = 'Local Network Hop';
+
+              if (linkId.includes('wan')) {
+                category = 'WAN Cloud Uplink';
+                hopTitle = 'Internet Edge (1.1.1.1)';
+                hopSubtitle = 'Public Internet Transit';
+              } else if (linkId === 'link_client_ap') {
+                category = 'Direct Wi-Fi Hop';
+                hopTitle = `Connected AP (${link.host})`;
+                hopSubtitle = 'Client Device ➔ Connected Mesh Node';
+              } else if (linkId === 'link_client_gateway') {
+                category = 'Mesh Transit Hop';
+                hopTitle = `Main Router Gateway (${link.host})`;
+                hopSubtitle = 'Client ➔ Root Gateway via Mesh Backhaul';
+              } else if (linkId.includes('router_modem')) {
+                category = 'Modem Uplink';
+                hopTitle = `ISP Modem / ONT (${link.host})`;
+                hopSubtitle = 'Root Router ➔ ISP Broadband Bridge';
+              } else if (linkId.includes('node') || linkId.includes('backhaul')) {
+                category = 'Satellite Mesh Backhaul';
+                hopTitle = `Satellite Node (${link.host})`;
+                hopSubtitle = 'Host ➔ Remote Satellite Node';
+              }
 
               return (
                 <div key={linkId} className="glass-panel p-5 flex flex-col justify-between">
                   <div>
                     <div className="flex items-start justify-between">
                       <div>
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500">
-                          {isWan ? 'WAN Uplink' : isBackhaul ? 'Mesh Satellite Link' : 'Local AP Link'}
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-semibold">
+                          {category}
                         </span>
-                        <h4 className="text-sm font-bold text-white mt-0.5">{link.host}</h4>
+                        <h4 className="text-sm font-bold text-white mt-0.5">{hopTitle}</h4>
+                        <span className="text-[10px] text-slate-400 block font-normal">{hopSubtitle}</span>
                       </div>
                       <span className={`px-2 py-0.5 rounded text-xs font-mono font-bold ${
                         link.lossPct > 10 ? 'bg-rose-500/20 text-rose-400' :
@@ -1836,6 +2037,31 @@ export default function App() {
                 </select>
               </div>
 
+              {/* Speedtest Automation */}
+              <div className="pt-3 border-t border-slate-800 space-y-2">
+                <label className="text-xs font-semibold text-slate-300 block mb-1">
+                  Background Speedtest Automation
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={speedtestAutoHourly}
+                    onChange={(e) => setSpeedtestAutoHourly(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
+                  />
+                  <span>Run speedtest automatically every 1 hour (Background)</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer text-xs text-slate-300 hover:text-white">
+                  <input
+                    type="checkbox"
+                    checked={speedtestRunOnRescan}
+                    onChange={(e) => setSpeedtestRunOnRescan(e.target.checked)}
+                    className="w-4 h-4 rounded bg-slate-900 border-slate-700 text-indigo-600 focus:ring-0"
+                  />
+                  <span>Run speedtest whenever network rescan completes</span>
+                </label>
+              </div>
+
               {/* Custom Nodes input if custom selected */}
               {settingsProvider === 'custom' && (
                 <div className="pt-2 border-t border-slate-800">
@@ -1893,6 +2119,129 @@ export default function App() {
                 className="px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-xs font-semibold text-white shadow-lg shadow-indigo-600/20 transition"
               >
                 Apply & Save Settings
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SPEEDTEST DETAILS & TELEMETRY MODAL */}
+      {isSpeedtestModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
+          <div className="glass-panel w-full max-w-lg p-6 bg-slate-900/95 border border-slate-800 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-amber-500/20 text-amber-400">
+                  <Zap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Bandwidth & Speed Telemetry</h3>
+                  <p className="text-xs text-slate-400">Edge network download, upload, and latency</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsSpeedtestModalOpen(false)}
+                className="text-slate-400 hover:text-white text-lg font-bold p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Live Metrics Showcase */}
+            <div className="grid grid-cols-3 gap-3 my-5">
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col justify-between">
+                <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider flex items-center gap-1">
+                  <ArrowDown className="w-3 h-3" /> Download
+                </span>
+                <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-white font-mono">
+                    {speedtestState.lastResult?.downloadMbps !== undefined ? speedtestState.lastResult.downloadMbps : '—'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">Mbps</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col justify-between">
+                <span className="text-[10px] font-mono text-purple-400 uppercase tracking-wider flex items-center gap-1">
+                  <ArrowUp className="w-3 h-3" /> Upload
+                </span>
+                <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-white font-mono">
+                    {speedtestState.lastResult?.uploadMbps !== undefined ? speedtestState.lastResult.uploadMbps : '—'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">Mbps</span>
+                </div>
+              </div>
+
+              <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 flex flex-col justify-between">
+                <span className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider flex items-center gap-1">
+                  <Activity className="w-3 h-3" /> Latency
+                </span>
+                <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-2xl font-black text-white font-mono">
+                    {speedtestState.lastResult?.pingMs !== undefined ? speedtestState.lastResult.pingMs : '—'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-mono">ms</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Test Status & Trigger */}
+            <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800 flex items-center justify-between">
+              <div>
+                <span className="text-[11px] text-slate-400 block font-mono">
+                  {speedtestState.isRunning
+                    ? ('Status: Running ' + speedtestState.currentStage + ' test in background...')
+                    : speedtestState.lastResult
+                      ? ('Last test: ' + new Date(speedtestState.lastResult.timestamp).toLocaleTimeString())
+                      : 'No recent test data'}
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {speedtestAutoHourly ? 'Automated hourly testing active' : 'Automated testing paused'}
+                </span>
+              </div>
+              <button
+                onClick={runSpeedtest}
+                disabled={speedtestState.isRunning}
+                className="px-3.5 py-1.5 rounded-lg bg-gradient-to-r from-cyan-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md active:scale-95 transition flex items-center gap-1.5"
+              >
+                <Zap className={"w-3.5 h-3.5 " + (speedtestState.isRunning ? "animate-spin" : "")} />
+                <span>{speedtestState.isRunning ? 'Testing...' : 'Test Bandwidth Now'}</span>
+              </button>
+            </div>
+
+            {/* History List */}
+            {speedtestState.history && speedtestState.history.length > 0 && (
+              <div className="mt-4">
+                <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2 font-mono">
+                  Recent Test Runs
+                </span>
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {speedtestState.history.slice(0, 8).map((run, idx) => (
+                    <div
+                      key={idx}
+                      className="p-2 rounded-lg bg-slate-950/50 border border-slate-800/80 flex items-center justify-between text-xs font-mono"
+                    >
+                      <span className="text-slate-400 text-[11px]">
+                        {new Date(run.timestamp).toLocaleTimeString()}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-cyan-400 font-bold">{run.downloadMbps} ↓</span>
+                        <span className="text-purple-400 font-bold">{run.uploadMbps} ↑</span>
+                        <span className="text-slate-300">{run.pingMs}ms</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-5 pt-3 border-t border-slate-800 flex justify-end">
+              <button
+                onClick={() => setIsSpeedtestModalOpen(false)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300"
+              >
+                Close
               </button>
             </div>
           </div>

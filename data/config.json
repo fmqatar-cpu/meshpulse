@@ -15,6 +15,11 @@
     "rssiCriticalDbm": -85,
     "jitterWarningMs": 30
   },
+  "speedtest": {
+    "enabled": true,
+    "intervalMinutes": 60,
+    "runOnRescan": true
+  },
   "customNodes": [],
   "nodeOverrides": {}
 }

@@ -8,6 +8,7 @@ const wifiScanner = require('./services/WifiScanner');
 const networkProber = require('./services/NetworkProber');
 const diagnosisEngine = require('./services/DiagnosisEngine');
 const deviceScanner = require('./services/DeviceScanner');
+const speedtestService = require('./services/SpeedtestService');
 const providerFactory = require('./providers/ProviderFactory');
 
 const app = express();
@@ -15,6 +16,14 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.json());
+
+// Forward speedtest background updates to WebSocket clients
+speedtestService.onUpdate((event, data) => {
+  broadcast({
+    type: 'SPEEDTEST_UPDATE',
+    data: speedtestService.getState()
+  });
+});
 
 // State
 let currentWifiInfo = null;
@@ -57,6 +66,7 @@ function getFullSnapshot() {
     topology: currentTopology,
     links: currentLinkStats,
     diagnosis: currentDiagnosis,
+    speedtest: speedtestService.getState(),
     config: configManager.get()
   };
 }
@@ -133,6 +143,29 @@ async function startEngine() {
     }
     await tickProbing().catch(console.error);
   }, intervalMs);
+
+  // Background Speedtest Scheduler (Runs every 1 hour by default, completely non-blocking)
+  let lastSpeedtestTime = 0;
+  setInterval(() => {
+    const currentCfg = configManager.get();
+    if (currentCfg.speedtest?.enabled !== false) {
+      const intervalMs = (currentCfg.speedtest?.intervalMinutes || 60) * 60 * 1000;
+      const now = Date.now();
+      if (now - lastSpeedtestTime >= intervalMs && !speedtestService.isRunning) {
+        lastSpeedtestTime = now;
+        speedtestService.run().catch(console.error);
+      }
+    }
+  }, 30000);
+
+  // Initial speedtest after 8 seconds on startup if enabled
+  setTimeout(() => {
+    const currentCfg = configManager.get();
+    if (currentCfg.speedtest?.enabled !== false && !speedtestService.isRunning) {
+      lastSpeedtestTime = Date.now();
+      speedtestService.run().catch(console.error);
+    }
+  }, 8000);
 }
 
 // REST API
@@ -208,6 +241,15 @@ app.post('/api/node-override', async (req, res) => {
   res.json({ success: true, nodeOverrides: configManager.get().nodeOverrides });
 });
 
+app.get('/api/speedtest', (req, res) => {
+  res.json(speedtestService.getState());
+});
+
+app.post('/api/speedtest', (req, res) => {
+  speedtestService.run().catch(console.error);
+  res.json({ success: true, state: speedtestService.getState() });
+});
+
 app.post('/api/rescan', async (req, res) => {
   await refreshTopology();
   await tickProbing();
@@ -215,6 +257,13 @@ app.post('/api/rescan', async (req, res) => {
     type: 'TOPOLOGY_UPDATE',
     data: getFullSnapshot()
   });
+
+  // Run non-blocking background speedtest on rescan if configured
+  const cfg = configManager.get();
+  if (cfg.speedtest?.runOnRescan !== false) {
+    speedtestService.run().catch(console.error);
+  }
+
   res.json({ success: true, message: 'Rescan completed' });
 });
 

@@ -337,13 +337,14 @@ class GoogleNestProvider extends BaseProvider {
         media: isWiredBackhaul ? 'Ethernet' : 'Wireless 6GHz'
       });
 
-      // Target to test this satellite
-      probeTargets.push({
-        id: `link_node_${leafId}`,
-        host: leaf.ip,
-        probeType: 'http',
-        url: `http://${leaf.ip}/api/v1/status`
-      });
+      // Target to test this satellite link via low-latency ICMP ping (only if not already the directly connected AP)
+      if (leaf.ip !== connectedNode.ip) {
+        probeTargets.push({
+          id: `link_node_${leafId}`,
+          host: leaf.ip,
+          probeType: 'icmp'
+        });
+      }
     });
 
     // 4. Connect Host PC to its active AP (Root or Leaf)
@@ -368,6 +369,7 @@ class GoogleNestProvider extends BaseProvider {
         name: `ISP Modem / ONT (${modemIp})`,
         type: 'modem',
         role: 'modem',
+        model: 'ISP Modem / ONT (Unknown)',
         ip: modemIp,
         ethernetLinked: Boolean(rootNode.ethernetLink),
         localWanIp: rootNode.localWanIp,
@@ -399,6 +401,7 @@ class GoogleNestProvider extends BaseProvider {
       name: 'Internet Gateway (WAN)',
       type: 'wan',
       role: 'internet',
+      model: 'Cloud Edge (1.1.1.1)',
       ip: '1.1.1.1',
       status: 'online'
     });
@@ -419,11 +422,14 @@ class GoogleNestProvider extends BaseProvider {
       probeType: 'icmp'
     });
 
-    probeTargets.push({
-      id: 'link_client_gateway',
-      host: rootNode.ip,
-      probeType: 'icmp'
-    });
+    // 2. Link to root router (if client is on a satellite, probe root gateway as the mesh transit hop)
+    if (connectedNode.ip !== rootNode.ip) {
+      probeTargets.push({
+        id: 'link_client_gateway',
+        host: rootNode.ip,
+        probeType: 'icmp'
+      });
+    }
 
     probeTargets.push({
       id: 'link_gateway_wan',
