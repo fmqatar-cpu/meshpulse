@@ -19,6 +19,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 class AndroidBridge(private val context: Context) {
+    private var lastResolvedBssid: String = ""
 
     private val executor = Executors.newCachedThreadPool()
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
@@ -74,21 +75,40 @@ class AndroidBridge(private val context: Context) {
                     bssid = ""
                 }
 
-                // If BSSID was redacted by Android, resolve candidate from scan results
+                // If BSSID was redacted by Android, resolve candidate from scan results with Roaming Hysteresis
                 if (bssid.isEmpty() && ssid.isNotEmpty()) {
                     try {
                         val scans = wifiManager?.scanResults ?: emptyList()
                         val matchingScans = scans.filter {
                             val scanSsid = it.SSID ?: ""
                             scanSsid == ssid || scanSsid == "\"$ssid\""
-                        }.sortedByDescending { it.level }
+                        }
 
                         if (matchingScans.isNotEmpty()) {
-                            bssid = matchingScans[0].BSSID ?: ""
+                            if (lastResolvedBssid.isNotEmpty()) {
+                                val currentScan = matchingScans.find { (it.BSSID ?: "").equals(lastResolvedBssid, ignoreCase = true) }
+                                val bestScan = matchingScans.maxByOrNull { it.level }
+                                if (bestScan != null && currentScan != null) {
+                                    // 10 dB Roaming Hysteresis threshold: only switch if the alternate AP is >= 10 dB stronger
+                                    if (bestScan.level > currentScan.level + 10) {
+                                        lastResolvedBssid = bestScan.BSSID ?: ""
+                                    }
+                                } else if (bestScan != null) {
+                                    lastResolvedBssid = bestScan.BSSID ?: ""
+                                }
+                            } else {
+                                val bestScan = matchingScans.maxByOrNull { it.level }
+                                if (bestScan != null) {
+                                    lastResolvedBssid = bestScan.BSSID ?: ""
+                                }
+                            }
+                            bssid = lastResolvedBssid
                         }
                     } catch (e: Exception) {
                         // Scan results restricted
                     }
+                } else if (bssid.isNotEmpty()) {
+                    lastResolvedBssid = bssid
                 }
 
                 val rssi = info?.rssi ?: -50

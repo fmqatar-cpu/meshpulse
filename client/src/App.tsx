@@ -119,9 +119,49 @@ interface Incident extends Issue {
   resolvedAt: number | null;
 }
 
+const OUI_MAP: Record<string, { vendor: string; type: string }> = {
+  // Google Nest
+  'fc:91:5d': { vendor: 'Google', type: 'Nest Wifi Pro Mesh' },
+  '58:70:c6': { vendor: 'Google', type: 'Nest / Home Device' },
+  'bc:35:1e': { vendor: 'Google', type: 'Nest Device' },
+  '38:2c:e5': { vendor: 'Google', type: 'Nest Device' },
+  // Asus
+  '50:d4:f7': { vendor: 'Asus', type: 'Asus AiMesh Router' },
+  '04:d9:f5': { vendor: 'Asus', type: 'Asus Router' },
+  'ac:84:c6': { vendor: 'Asus', type: 'Asus Router' },
+  // Netgear
+  '28:6b:35': { vendor: 'Netgear', type: 'Orbi Mesh' },
+  'e4:f4:c6': { vendor: 'Netgear', type: 'Nighthawk Router' },
+  'a0:04:60': { vendor: 'Netgear', type: 'Netgear Router' },
+  // TP-Link
+  '30:b5:c2': { vendor: 'TP-Link', type: 'Deco Mesh' },
+  '50:c7:bf': { vendor: 'TP-Link', type: 'Archer Router' },
+  '60:32:b1': { vendor: 'TP-Link', type: 'TP-Link AP' },
+  // Eero
+  '74:83:c2': { vendor: 'Eero', type: 'Amazon Eero Mesh' },
+  // Ubiquiti
+  'f0:9f:c2': { vendor: 'Ubiquiti', type: 'UniFi AP' },
+  '24:5a:4c': { vendor: 'Ubiquiti', type: 'UniFi AP' },
+  '78:8a:20': { vendor: 'Ubiquiti', type: 'UniFi Router' },
+  // Clients
+  'f8:17:2d': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
+  '98:ed:5c': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
+  '84:7a:b6': { vendor: 'Apple', type: 'Apple Device' },
+  'b4:b8:53': { vendor: 'Apple', type: 'Apple Device' },
+  '74:f9:ca': { vendor: 'Apple', type: 'Apple Device' },
+  'c0:f8:53': { vendor: 'Apple', type: 'Apple Device' },
+  '90:ca:fa': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+  '54:60:09': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+  '20:1f:3b': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
+  '20:f1:b2': { vendor: 'Sony', type: 'PlayStation / Bravia' },
+  '38:1f:8d': { vendor: 'Sony', type: 'PlayStation 5 / Audio' },
+  '1c:53:f9': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' },
+  'd8:1f:12': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' }
+};
+
 export default function App() {
   const [snapshot, setSnapshot] = useState<any>(null);
-  const [activeProvider, setActiveProvider] = useState<any>({ id: 'google_nest', name: 'Google Nest Wifi Pro' });
+  const [activeProvider, setActiveProvider] = useState<any>({ id: 'auto', name: 'Auto-Detect Mesh Network' });
   const [providersList, setProvidersList] = useState<any[]>([]);
   const [selectedNode, setSelectedNode] = useState<MeshNode | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -412,25 +452,6 @@ export default function App() {
         if (bridge.getConnectedDevices) {
           const raw = bridge.getConnectedDevices();
           const parsed = JSON.parse(raw || '[]');
-          const OUI_MAP: Record<string, { vendor: string; type: string }> = {
-            'fc:91:5d': { vendor: 'Google', type: 'Nest Wifi Pro Mesh' },
-            '58:70:c6': { vendor: 'Google', type: 'Nest / Home Device' },
-            'bc:35:1e': { vendor: 'Google', type: 'Nest Device' },
-            '38:2c:e5': { vendor: 'Google', type: 'Nest Device' },
-            'f8:17:2d': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
-            '98:ed:5c': { vendor: 'Apple', type: 'iPhone / Mac / iPad' },
-            '84:7a:b6': { vendor: 'Apple', type: 'Apple Device' },
-            'b4:b8:53': { vendor: 'Apple', type: 'Apple Device' },
-            '74:f9:ca': { vendor: 'Apple', type: 'Apple Device' },
-            'c0:f8:53': { vendor: 'Apple', type: 'Apple Device' },
-            '90:ca:fa': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
-            '54:60:09': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
-            '20:1f:3b': { vendor: 'Samsung', type: 'Galaxy / Smart TV' },
-            '20:f1:b2': { vendor: 'Sony', type: 'PlayStation / Bravia' },
-            '38:1f:8d': { vendor: 'Sony', type: 'PlayStation 5 / Audio' },
-            '1c:53:f9': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' },
-            'd8:1f:12': { vendor: 'Intel', type: 'PC Wi-Fi Adapter' }
-          };
           const devList = parsed.map((d: any) => {
             const oui = d.mac.slice(0, 8);
             const firstByte = parseInt(d.mac.slice(0, 2), 16) || 0;
@@ -508,6 +529,7 @@ export default function App() {
 
       let cachedDiscoveredNodes: any[] = [];
       let lastMeshSweep = 0;
+      let lastConnectedNodeIp = '';
 
       const runAndroidTick = () => {
         try {
@@ -552,23 +574,34 @@ export default function App() {
             visibleBssids = JSON.parse(bridge.getVisibleBssids() || '[]');
           } catch (e) {}
 
-          // 2. Root vs Leaf Separation
+          // 2. Mesh Nodes vs Generic Network
+          const isGoogleNestDiscovered = cachedDiscoveredNodes.length > 0;
+
           const rootCandidate = cachedDiscoveredNodes.find(n => n.role === 'root') ||
                                 cachedDiscoveredNodes.find(n => n.ip === gatewayIp) || {
             ip: gatewayIp,
-            model: 'Nest Wifi Pro',
+            model: 'Main Router',
             role: 'root',
             mac: ''
           };
 
           const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
 
-          // 3. Real Path Discovery: Determine Connected Node via 5-octet BSSID Match, then 4-octet, then Latency
+          // 3. Dynamic Upstream WAN Modem Detection (NEVER hardcode!)
+          let modemIp: string | null = null;
+          if (rootCandidate.wan && rootCandidate.wan.gatewayIpAddress) {
+            const wanGw = rootCandidate.wan.gatewayIpAddress;
+            if (wanGw && wanGw !== gatewayIp && wanGw !== '0.0.0.0' && !wanGw.startsWith('127.')) {
+              modemIp = wanGw;
+            }
+          }
+
+          // 4. Real Path Discovery: Determine Connected Node via 5-octet BSSID Match, then 4-octet
           const clientBssid = (wifiParsed.bssid || '').toLowerCase().replace(/[:-]/g, '');
           let connectedNode: any = null;
 
           if (clientBssid && clientBssid.length >= 8) {
-            // Check 5 octets (10 hex characters) - e.g. "fc915dcd00" vs "fc915dcd05"
+            // Check 5 octets (10 hex characters)
             const bssidPrefix5 = clientBssid.slice(0, 10);
             const satMatch5 = leafCandidates.find(leaf => {
               const leafMac = (leaf.mac || '').toLowerCase().replace(/[:-]/g, '');
@@ -598,31 +631,20 @@ export default function App() {
             }
           }
 
-          // 4. Latency Discovery Fallback if BSSID MAC was redacted
-          if (!connectedNode && leafCandidates.length > 0) {
-            try {
-              const rootPing = JSON.parse(bridge.ping(rootCandidate.ip, 1));
-              const leafPing = JSON.parse(bridge.ping(leafCandidates[0].ip, 1));
-              if (leafPing.success && rootPing.success) {
-                // Direct Wi-Fi hop to connected AP is lower latency than backhaul hop
-                connectedNode = (leafPing.latency < rootPing.latency - 1) ? leafCandidates[0] : rootCandidate;
-              } else if (leafPing.success) {
-                connectedNode = leafCandidates[0];
-              } else {
-                connectedNode = rootCandidate;
-              }
-            } catch (e) {
+          // Sticky Association Lock: Prevent 1-sample ping latency ping-ponging!
+          if (!connectedNode) {
+            if (lastConnectedNodeIp) {
+              connectedNode = cachedDiscoveredNodes.find(n => n.ip === lastConnectedNodeIp) || rootCandidate;
+            } else {
               connectedNode = rootCandidate;
             }
-          } else if (!connectedNode) {
-            connectedNode = rootCandidate;
           }
+          lastConnectedNodeIp = connectedNode.ip;
 
           const isClientOnRoot = (connectedNode.ip === rootCandidate.ip);
 
           // 5. Active Pings based on actual discovered path
           const targetApIp = connectedNode.ip;
-          const modemIp = '192.168.100.1';
 
           const apPingRaw = JSON.parse(bridge.ping(targetApIp, 1));
           let gatewayPingRaw = { success: false, latency: 0 };
@@ -633,15 +655,17 @@ export default function App() {
           }
 
           let modemPingRaw = { success: false, latency: 0 };
-          try {
-            modemPingRaw = JSON.parse(bridge.ping(modemIp, 1) || '{"success":false,"latency":0}');
-          } catch (e) {}
+          if (modemIp) {
+            try {
+              modemPingRaw = JSON.parse(bridge.ping(modemIp, 1) || '{"success":false,"latency":0}');
+            } catch (e) {}
+          }
 
           const wanPingRaw = JSON.parse(bridge.ping('1.1.1.1', 1));
 
           const apMs = apPingRaw.success ? Math.round(apPingRaw.latency) : null;
           const gatewayMs = gatewayPingRaw.success ? Math.round(gatewayPingRaw.latency) : null;
-          const modemMs = modemPingRaw.success ? Math.round(modemPingRaw.latency) : null;
+          const modemMs = (modemIp && modemPingRaw.success) ? Math.round(modemPingRaw.latency) : null;
           const wanMs = wanPingRaw.success ? Math.round(wanPingRaw.latency) : null;
 
           androidHistory.link_client_ap.push({ t: now, ms: apMs });
@@ -652,9 +676,11 @@ export default function App() {
             if (androidHistory.link_client_gateway.length > 25) androidHistory.link_client_gateway.shift();
           }
 
-          if (!androidHistory.link_router_modem) androidHistory.link_router_modem = [];
-          androidHistory.link_router_modem.push({ t: now, ms: modemMs });
-          if (androidHistory.link_router_modem.length > 25) androidHistory.link_router_modem.shift();
+          if (modemIp) {
+            if (!androidHistory.link_router_modem) androidHistory.link_router_modem = [];
+            androidHistory.link_router_modem.push({ t: now, ms: modemMs });
+            if (androidHistory.link_router_modem.length > 25) androidHistory.link_router_modem.shift();
+          }
 
           androidHistory.link_gateway_wan.push({ t: now, ms: wanMs });
           if (androidHistory.link_gateway_wan.length > 25) androidHistory.link_gateway_wan.shift();
@@ -680,12 +706,15 @@ export default function App() {
 
           const linkStats: Record<string, any> = {
             link_client_ap: calcStats('link_client_ap', targetApIp, androidHistory.link_client_ap),
-            link_router_modem: calcStats('link_router_modem', modemIp, androidHistory.link_router_modem),
             link_gateway_wan: calcStats('link_gateway_wan', '1.1.1.1', androidHistory.link_gateway_wan)
           };
 
           if (!isClientOnRoot) {
             linkStats['link_client_gateway'] = calcStats('link_client_gateway', rootCandidate.ip, androidHistory.link_client_gateway);
+          }
+
+          if (modemIp) {
+            linkStats['link_router_modem'] = calcStats('link_router_modem', modemIp, androidHistory.link_router_modem);
           }
 
           // Load local overrides
@@ -712,25 +741,15 @@ export default function App() {
           });
 
           // 2. Mesh Topology Assembly
-          if (cachedDiscoveredNodes.length > 0) {
-            const rootCandidate = cachedDiscoveredNodes.find(n => n.role === 'root') ||
-                                  cachedDiscoveredNodes.find(n => n.ip === gatewayIp) || {
-              ip: gatewayIp,
-              model: 'Nest Wifi Pro',
-              role: 'root',
-              hardwareId: ''
-            };
-
-            const leafCandidates = cachedDiscoveredNodes.filter(n => n.ip !== rootCandidate.ip);
-
+          if (isGoogleNestDiscovered) {
             const rootNodeId = `node_nest_${rootCandidate.ip.replace(/\./g, '_')}`;
             nodes.push({
               id: rootNodeId,
-              name: `${rootCandidate.model || 'Nest Wifi Pro'} (Main Router)`,
+              name: `${rootCandidate.model || 'Google Nest'} (Main Router)`,
               type: 'root',
               role: 'root',
               ip: rootCandidate.ip,
-              model: rootCandidate.model,
+              model: rootCandidate.model || 'Google Nest',
               softwareVersion: rootCandidate.softwareVersion,
               uptime: rootCandidate.uptime,
               meshChannel: rootCandidate.meshChannel,
@@ -753,11 +772,11 @@ export default function App() {
 
               nodes.push({
                 id: leafId,
-                name: `Nest Point ${idx + 1} (${leaf.ip})`,
+                name: `Mesh Point ${idx + 1} (${leaf.ip})`,
                 type: 'satellite',
                 role: 'leaf',
                 ip: leaf.ip,
-                model: leaf.model,
+                model: leaf.model || 'Mesh Point',
                 softwareVersion: leaf.softwareVersion,
                 uptime: leaf.uptime,
                 backhaulType: backhaulDesc,
@@ -788,42 +807,71 @@ export default function App() {
               media: 'Wi-Fi'
             });
 
-            // Connect root to modem
-            linksArr.push({
-              id: 'link_router_modem',
-              from: rootNodeId,
-              to: 'node_modem',
-              name: 'Router Uplink',
-              type: 'wan_link',
-              media: 'Gigabit Ethernet'
-            });
+            // Only add Modem node if actually discovered dynamically!
+            if (modemIp) {
+              const modemNodeId = 'node_modem';
+              nodes.push({
+                id: modemNodeId,
+                name: `ISP Modem / ONT (${modemIp})`,
+                type: 'modem',
+                role: 'modem',
+                ip: modemIp,
+                status: 'online'
+              });
 
-            // Connect modem to internet
-            linksArr.push({
-              id: 'link_gateway_wan',
-              from: 'node_modem',
-              to: 'node_internet',
-              name: 'WAN Broadband',
-              type: 'wan_link',
-              media: 'Broadband Fiber'
-            });
+              linksArr.push({
+                id: 'link_router_modem',
+                from: rootNodeId,
+                to: modemNodeId,
+                name: 'Router Uplink',
+                type: 'wan_link',
+                media: 'Gigabit Ethernet'
+              });
+
+              linksArr.push({
+                id: 'link_gateway_wan',
+                from: modemNodeId,
+                to: 'node_internet',
+                name: 'WAN Broadband',
+                type: 'wan_link',
+                media: 'Broadband Fiber'
+              });
+            } else {
+              // Direct from Main Router to Internet
+              linksArr.push({
+                id: 'link_gateway_wan',
+                from: rootNodeId,
+                to: 'node_internet',
+                name: 'WAN Broadband',
+                type: 'wan_link',
+                media: 'Internet Uplink'
+              });
+            }
 
           } else {
-            // Generic Mesh / BSSID Fallback
+            // Universal Generic Wi-Fi & Multi-AP Mesh Discovery (Any Brand)
             const matchingBssids = visibleBssids.filter((b: any) =>
               b.ssid && wifiParsed.ssid && (b.ssid === wifiParsed.ssid || b.ssid === `"${wifiParsed.ssid}"`)
             );
+
+            // Lookup vendor name from MAC OUI database
+            const cleanBssid = (wifiParsed.bssid || '').toLowerCase().replace(/[:-]/g, '');
+            const ouiKey8 = cleanBssid.slice(0, 8);
+            const ouiKey6 = cleanBssid.slice(0, 6);
+            const ouiFormatted = cleanBssid.length >= 6 ? (cleanBssid.slice(0, 2) + ':' + cleanBssid.slice(2, 4) + ':' + cleanBssid.slice(4, 6)) : '';
+            const vendorEntry = OUI_MAP[ouiFormatted];
+            const vendorBrand = vendorEntry ? vendorEntry.vendor : 'Wi-Fi';
 
             const gatewayNodeId = 'node_gateway';
             const isClientOnGateway = matchingBssids.length <= 1;
 
             nodes.push({
               id: gatewayNodeId,
-              name: `Main Router (${gatewayIp})`,
+              name: `${vendorBrand} Router (${gatewayIp})`,
               type: 'root',
               role: 'root',
               ip: gatewayIp,
-              model: 'Mesh Gateway',
+              model: `${vendorBrand} Gateway`,
               isCurrentAP: isClientOnGateway,
               status: 'online'
             });
@@ -834,7 +882,7 @@ export default function App() {
                 const apId = `node_ap_${idx + 1}`;
                 nodes.push({
                   id: apId,
-                  name: isCurrent ? `Connected AP (${bssidObj.bssid.slice(-8)})` : `Mesh Point ${idx + 1} (${bssidObj.bssid.slice(-8)})`,
+                  name: isCurrent ? `Connected AP (${bssidObj.bssid.slice(-8)})` : `Mesh Satellite ${idx + 1} (${bssidObj.bssid.slice(-8)})`,
                   type: 'satellite',
                   role: 'leaf',
                   bssid: bssidObj.bssid,
@@ -855,7 +903,6 @@ export default function App() {
                 });
               });
 
-              // Link phone to connected satellite or first AP
               const activeAp = nodes.find(n => n.type === 'satellite' && n.isCurrentAP) || nodes.find(n => n.type === 'satellite');
               linksArr.push({
                 id: 'link_client_ap',
@@ -876,36 +923,17 @@ export default function App() {
               });
             }
 
-            linksArr.push({
-              id: 'link_router_modem',
-              from: gatewayNodeId,
-              to: 'node_modem',
-              name: 'Router Uplink',
-              type: 'wan_link',
-              media: 'Gigabit Ethernet'
-            });
-
+            // Direct link to Internet (no fake modem)
             linksArr.push({
               id: 'link_gateway_wan',
-              from: 'node_modem',
+              from: gatewayNodeId,
               to: 'node_internet',
-              name: 'WAN Broadband',
+              name: 'Internet Gateway',
               type: 'wan_link',
-              media: 'Broadband Fiber'
+              media: 'Internet Uplink'
             });
           }
 
-          // 3. ISP Modem / ONT Node
-          nodes.push({
-            id: 'node_modem',
-            name: `ISP Modem / ONT (${modemIp})`,
-            type: 'modem',
-            role: 'modem',
-            ip: modemIp,
-            status: modemPingRaw.success ? 'online' : 'offline'
-          });
-
-          // 4. Internet Gateway Node
           nodes.push({
             id: 'node_internet',
             name: 'Internet Gateway',
@@ -1495,9 +1523,9 @@ export default function App() {
                   {(() => {
                     const rootNode = topology.nodes?.find((n: any) => n.type === 'root') || {
                       id: 'node_gateway',
-                      name: 'Nest Wifi Pro (Main Router)',
+                      name: 'Main Router',
                       type: 'root',
-                      ip: wifi.gatewayIp || '192.168.86.1',
+                      ip: wifi.gatewayIp || '192.168.1.1',
                       isCurrentAP: false
                     };
 
